@@ -4341,3 +4341,85 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
   .tt-player-card img { width:45px; height:54px; }
   .tt-player-copy strong { font-size:12px; }
 }
+
+/* Phone-sized Team Insights tables: keep every statistic in the viewport. */
+@media (max-width:700px) {
+  .team-table-wrap {
+    width:100%;
+    overflow-x:hidden !important;
+    overflow-y:auto !important;
+  }
+
+  .team-table {
+    width:100% !important;
+    min-width:0 !important;
+    table-layout:fixed;
+  }
+
+  .team-table th,
+  .team-table td {
+    min-width:0 !important;
+    padding:4px 2px !important;
+    text-align:center;
+    white-space:nowrap;
+    font-size:9.5px;
+  }
+
+  .team-table thead th {
+    padding-block:8px !important;
+    font-size:7px !important;
+    letter-spacing:.35px !important;
+  }
+
+  .team-table td {
+    height:52px;
+  }
+
+  .team-table .tt-player {
+    position:static !important;
+    left:auto !important;
+    z-index:auto !important;
+    min-width:0 !important;
+    padding:2px 3px !important;
+    text-align:left;
+  }
+
+  #order-table .tt-player { width:43% !important; }
+  #order-table th:not(.tt-player),
+  #order-table td:not(.tt-player) { width:9.5% !important; }
+
+  #arsenal-table .tt-player { width:48% !important; }
+  #arsenal-table th:not(.tt-player),
+  #arsenal-table td:not(.tt-player) { width:13% !important; }
+
+  .tt-player-card {
+    display:grid;
+    grid-template-columns:18px 35px minmax(0,1fr) !important;
+    gap:4px !important;
+    min-height:48px;
+    overflow:hidden;
+  }
+
+  .tt-player-card .tt-order {
+    width:18px;
+    height:22px;
+    border-radius:6px;
+    font-size:8px;
+  }
+
+  .tt-player-card img {
+    width:35px !important;
+    height:46px !important;
+  }
+
+  .tt-player-copy { gap:2px; overflow:hidden; }
+  .tt-player-copy strong { font-size:9.5px !important; }
+  .tt-player-copy small { font-size:7px !important; letter-spacing:.5px; }
+
+  .team-table td[colspan] {
+    width:auto !important;
+    padding:14px 8px !important;
+    white-space:normal;
+    font-size:9px;
+  }
+}

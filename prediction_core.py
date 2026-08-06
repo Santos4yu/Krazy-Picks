@@ -1387,6 +1387,16 @@ def _weather_environment_line(weather: dict) -> str:
         return "Game-time weather unavailable."
     venue = weather.get("venue") or "Venue"
     temp = weather.get("temp_f")
+    if weather.get("roof_pending"):
+        forecast_bits = []
+        if temp is not None:
+            forecast_bits.append(f"{temp}°F")
+        rain = weather.get("rain_probability")
+        if rain is not None:
+            forecast_bits.append(f"{rain}% rain chance")
+        forecast_text = " · ".join(forecast_bits)
+        suffix = f" Outdoor forecast if opened: {forecast_text}." if forecast_text else ""
+        return f"{venue} · retractable-roof decision pending.{suffix} Weather is not applied to the lean until MLB confirms the roof open."
     if weather.get("dome"):
         roof = weather.get("roof_status") or "Indoor"
         temp_text = f" · {temp}°F reported inside" if temp is not None else ""
@@ -1420,7 +1430,7 @@ def _weather_environment_line(weather: dict) -> str:
 
 
 def _weather_wind_line(weather: dict) -> str:
-    if not weather or weather.get("error") or weather.get("dome"):
+    if not weather or weather.get("error") or weather.get("dome") or weather.get("roof_pending"):
         return ""
     speed = weather.get("speed_mph")
     if speed is None:

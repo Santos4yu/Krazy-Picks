@@ -2953,7 +2953,7 @@ def get_game_weather(home_team_abbr: str, game_time_utc: str = "", game_pk=None)
     a short TTL file cache eliminates nearly all of that for repeat lookups.
     """
     from datetime import date as _date
-    cache_key = f"weather_v2_{game_pk or home_team_abbr}_{game_time_utc or _date.today().isoformat()}"
+    cache_key = f"weather_v3_{game_pk or home_team_abbr}_{game_time_utc or _date.today().isoformat()}"
     cache_file = CACHE_DIR / f"{cache_key}.json"
     if cache_file.exists():
         try:
@@ -2996,6 +2996,8 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
     roof_type = "Fixed" if is_dome else "Open"
     official_condition = ""
     official_weather = {}
+    roof_pending = False
+    retractable_roof = False
 
     # The game feed identifies the actual venue and roof decision. That avoids
     # pretending every retractable-roof game is indoors and also handles
@@ -3032,6 +3034,9 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
 
         condition_l = official_condition.lower()
         roof_closed = "roof closed" in condition_l or condition_l in {"dome", "indoors", "indoor"}
+        roof_open = "roof open" in condition_l
+        retractable_roof = str(roof_type).lower() == "retractable"
+        roof_pending = retractable_roof and not roof_closed and not roof_open
         fixed_roof = str(roof_type).lower() in {"dome", "fixed", "indoor"}
         if roof_closed or fixed_roof:
             try:
@@ -3079,13 +3084,16 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
         fallback_effect = wind_text.split(",", 1)[1].strip() if "," in wind_text else "direction unavailable"
         effect_l = fallback_effect.lower()
         fallback_hf = True if fallback_speed >= 7 and "out" in effect_l else False if fallback_speed >= 7 and "in" in effect_l else None
+        if roof_pending:
+            fallback_hf = None
         return {
             "speed_mph": fallback_speed, "direction_deg": None,
             "effect": fallback_effect, "hitter_friendly": fallback_hf,
             "temp_f": fallback_temp, "feels_like_f": None,
             "humidity_pct": None, "rain_probability": None,
             "precipitation_in": None, "dome": False,
-            "roof_status": "Open" if str(roof_type).lower() == "retractable" else "Outdoor",
+            "roof_status": "Pending" if roof_pending else "Open" if retractable_roof else "Outdoor",
+            "roof_pending": roof_pending,
             "roof_type": roof_type, "venue": venue_name,
             "condition": official_condition, "forecast": False,
             "source": "Official MLB game feed fallback",
@@ -3130,7 +3138,7 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
             wind_from = dirs[idx]
             temp_f    = round(temps[idx]) if idx < len(temps) else None
             effect, hf = _wind_effect(wind_from, cf_bearing)
-            if speed_mph < 7:
+            if speed_mph < 7 or roof_pending:
                 hf = None
             return {
                 "speed_mph":       speed_mph,
@@ -3144,7 +3152,8 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
                 "precipitation_in": round(float(precipitation[idx]) / 25.4, 2) if idx < len(precipitation) else None,
                 "weather_code":    weather_codes[idx] if idx < len(weather_codes) else None,
                 "dome":            False,
-                "roof_status":     "Open" if str(roof_type).lower() == "retractable" else "Outdoor",
+                "roof_status":     "Pending" if roof_pending else "Open" if retractable_roof else "Outdoor",
+                "roof_pending":    roof_pending,
                 "roof_type":       roof_type,
                 "venue":           venue_name,
                 "condition":       official_condition,
@@ -3172,6 +3181,8 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
         wind_from = curr.get("wind_direction_10m", 0)
         temp_f    = round(curr["temperature_2m"]) if curr.get("temperature_2m") is not None else None
         effect, hf = _wind_effect(wind_from, cf_bearing)
+        if roof_pending:
+            hf = None
         return {
             "speed_mph":       speed_mph,
             "direction_deg":   wind_from,
@@ -3179,6 +3190,11 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
             "hitter_friendly": hf,
             "temp_f":          temp_f,
             "dome":            False,
+            "roof_status":     "Pending" if roof_pending else "Open" if retractable_roof else "Outdoor",
+            "roof_pending":    roof_pending,
+            "roof_type":       roof_type,
+            "venue":           venue_name,
+            "source":          "Current conditions fallback",
             "forecast":        False,
         }
     except Exception as exc:

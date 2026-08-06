@@ -1297,7 +1297,7 @@ def grade_pick(
 
     # ── Wind / weather ────────────────────────────────────────────────────────
     weather = weather or {}
-    if not weather.get("error") and not weather.get("dome"):
+    if not weather.get("error") and not weather.get("dome") and not weather.get("roof_pending"):
         speed = weather.get("speed_mph", 0) or 0
         hf    = weather.get("hitter_friendly")
         if hf is True and speed >= 10:
@@ -2100,7 +2100,7 @@ def _v2_context(lineup_spot, proj_pa, weather, umpire, prop_type, is_under, rest
         parts.append(pa_fav); weights.append(0.40)
 
     weather = weather or {}
-    if not weather.get("error") and not weather.get("dome"):
+    if not weather.get("error") and not weather.get("dome") and not weather.get("roof_pending"):
         speed = weather.get("speed_mph", 0) or 0
         hf = weather.get("hitter_friendly")
         if speed >= 5 and hf is not None:

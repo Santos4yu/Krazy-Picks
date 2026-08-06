@@ -2005,6 +2005,13 @@ function teamPlayerCell(row) {
   return `<div class="tt-player-card"><span class="tt-order">${row.order}</span><img src="${photo}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"><span class="tt-player-copy"><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(row.position || "MLB")}</small></span></div>`;
 }
 
+function formatBattingAverage(value) {
+  if (value == null || value === "") return "—";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return numeric.toFixed(3).replace(/^0(?=\.)/, "");
+}
+
 function renderArsenalView(data) {
   els.arsenalEmpty.hidden = true;
   const pitchTypes = data.pitchTypes || [];
@@ -2082,7 +2089,7 @@ function renderArsenalView(data) {
       tr.innerHTML = `
         <td class="tt-player">${teamPlayerCell(row)}</td>
         <td>${stat.pa ?? "—"}</td>
-        <td class="${tierClassFor("avg", stat.avg)}">${stat.avg ?? "—"}</td>
+        <td class="${tierClassFor("avg", stat.avg)}">${formatBattingAverage(stat.avg)}</td>
         <td class="${tierClassFor("k_pct", stat.k_pct)}">${stat.k_pct != null ? stat.k_pct + "%" : "—"}</td>
       `;
     }

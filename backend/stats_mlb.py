@@ -2991,6 +2991,7 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
     venue_name = ""
     roof_type = "Fixed" if is_dome else "Open"
     official_condition = ""
+    official_weather = {}
 
     # The game feed identifies the actual venue and roof decision. That avoids
     # pretending every retractable-roof game is indoors and also handles
@@ -3060,6 +3061,32 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
             "source": "Venue configuration; game roof decision unavailable",
         }
 
+    def _official_outdoor_fallback():
+        if not official_weather:
+            return None
+        import re as _re
+        try:
+            fallback_temp = round(float(official_weather.get("temp")))
+        except (TypeError, ValueError):
+            fallback_temp = None
+        wind_text = str(official_weather.get("wind") or "")
+        speed_match = _re.search(r"([\d.]+)\s*mph", wind_text, _re.I)
+        fallback_speed = round(float(speed_match.group(1)), 1) if speed_match else 0
+        fallback_effect = wind_text.split(",", 1)[1].strip() if "," in wind_text else "direction unavailable"
+        effect_l = fallback_effect.lower()
+        fallback_hf = True if fallback_speed >= 7 and "out" in effect_l else False if fallback_speed >= 7 and "in" in effect_l else None
+        return {
+            "speed_mph": fallback_speed, "direction_deg": None,
+            "effect": fallback_effect, "hitter_friendly": fallback_hf,
+            "temp_f": fallback_temp, "feels_like_f": None,
+            "humidity_pct": None, "rain_probability": None,
+            "precipitation_in": None, "dome": False,
+            "roof_status": "Open" if str(roof_type).lower() == "retractable" else "Outdoor",
+            "roof_type": roof_type, "venue": venue_name,
+            "condition": official_condition, "forecast": False,
+            "source": "Official MLB game feed fallback",
+        }
+
     # ── Try hourly game-time forecast first ───────────────────────────────────
     if game_time_utc:
         try:
@@ -3118,7 +3145,10 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
                 "source":          "Official MLB venue/roof context + Open-Meteo game-time forecast",
             }
         except Exception:
-            pass   # fall through to current conditions
+            official_fallback = _official_outdoor_fallback()
+            if official_fallback:
+                return official_fallback
+            pass   # fall through to current conditions only if MLB has no weather yet
 
     # ── Fallback: current conditions ──────────────────────────────────────────
     url = (
@@ -3145,6 +3175,13 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
             "forecast":        False,
         }
     except Exception as exc:
+        # MLB publishes its own game-specific weather near first pitch. It
+        # does not include an hourly rain probability, but it is a reliable
+        # fallback for temperature, current condition and ballpark wind when
+        # the forecast service is temporarily unreachable from the host.
+        official_fallback = _official_outdoor_fallback()
+        if official_fallback:
+            return official_fallback
         return {"error": str(exc)}
 
 

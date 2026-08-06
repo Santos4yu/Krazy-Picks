@@ -4221,6 +4221,34 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
   .settings-btn { transition-duration:.01ms !important; }
 }
 
+/* Mobile landing: keep the glass nav below iOS/Android status controls. */
+@media (max-width:760px) {
+  .main-menu-nav {
+    top:max(calc(env(safe-area-inset-top,0px) + 12px),48px) !important;
+    width:calc(100% - 24px) !important;
+    min-height:50px;
+    padding:5px 9px 5px 12px;
+    border-radius:15px;
+  }
+  .main-menu-nav strong { min-width:0; gap:9px; font-size:14px; }
+  .main-menu-nav strong img { width:32px !important; height:32px !important; flex:0 0 32px; }
+  .main-menu-nav nav { gap:8px; }
+  .main-menu-hero { margin-top:clamp(52px,8vh,82px); }
+  .main-menu-brandlock { gap:14px; }
+  .main-menu-brandlock>img { width:min(52vw,210px); }
+  .main-menu-brandlock p { margin-bottom:8px; font-size:9px; letter-spacing:2.5px; }
+  .main-menu-brandlock h2 { font-size:clamp(40px,13vw,62px) !important; line-height:.88 !important; }
+  .main-menu-brandlock>div>span { margin-top:10px; font-size:15px; }
+  .main-menu-actions { margin-top:25px !important; }
+}
+@media (max-width:380px), (max-height:720px) {
+  .main-menu-nav { top:max(calc(env(safe-area-inset-top,0px) + 9px),42px) !important; }
+  .main-menu-hero { margin-top:58px; }
+  .main-menu-brandlock>img { width:min(45vw,170px); }
+  .main-menu-brandlock h2 { font-size:clamp(36px,12vw,50px) !important; }
+  .main-menu-actions { margin-top:18px !important; }
+}
+
 /* Glass search surface with the same reactive edge treatment as cards. */
 .search-wrap { overflow:visible !important; }
 .search-box { position:relative; isolation:isolate; height:58px !important; padding:6px 7px 6px 22px !important; border:1px solid rgba(126,159,207,.22) !important; border-radius:999px !important; background:linear-gradient(115deg,rgba(14,21,33,.68),rgba(6,11,19,.48)) !important; backdrop-filter:blur(18px) saturate(135%); -webkit-backdrop-filter:blur(18px) saturate(135%); box-shadow:inset 0 1px rgba(255,255,255,.06),0 16px 42px rgba(0,0,0,.2) !important; }

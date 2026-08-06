@@ -97,6 +97,28 @@ export default function Dock({
 }) {
   const mouseX = useMotionValue(Infinity);
   const isHovered = useMotionValue(0);
+  const [isMobileVisible, setIsMobileVisible] = useState(true);
+
+  useEffect(() => {
+    let ticking = false;
+    const syncVisibility = () => {
+      const isMobile = window.matchMedia('(max-width: 700px)').matches;
+      setIsMobileVisible(!isMobile || window.scrollY <= 2);
+      ticking = false;
+    };
+    const requestSync = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(syncVisibility);
+    };
+    window.addEventListener('scroll', requestSync, { passive: true });
+    window.addEventListener('resize', requestSync);
+    syncVisibility();
+    return () => {
+      window.removeEventListener('scroll', requestSync);
+      window.removeEventListener('resize', requestSync);
+    };
+  }, []);
 
   const maxHeight = useMemo(
     () => Math.max(dockHeight, magnification + magnification / 2 + 4),
@@ -116,7 +138,7 @@ export default function Dock({
           isHovered.set(0);
           mouseX.set(Infinity);
         }}
-        className={`dock-panel ${className}`}
+        className={`dock-panel ${isMobileVisible ? '' : 'dock-mobile-hidden'} ${className}`}
         style={{ height: panelHeight }}
         role="toolbar"
         aria-label="Application dock"

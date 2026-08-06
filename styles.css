@@ -4423,3 +4423,50 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
     font-size:9px;
   }
 }
+
+/* Pitch Arsenal carries wider metrics, so let phones swipe it without
+   sacrificing legibility. The player identity stays anchored while swiping. */
+@media (max-width:700px) {
+  .team-table-wrap:has(#arsenal-table) {
+    overflow-x:auto !important;
+    overflow-y:auto !important;
+    overscroll-behavior-x:contain;
+    touch-action:pan-x pan-y;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:thin;
+    scrollbar-color:rgba(69,145,255,.55) rgba(11,19,32,.75);
+  }
+
+  #arsenal-table {
+    width:600px !important;
+    min-width:600px !important;
+    table-layout:fixed;
+  }
+
+  #arsenal-table .tt-player {
+    position:sticky !important;
+    left:0 !important;
+    z-index:3 !important;
+    width:190px !important;
+    min-width:190px !important;
+    background:#0d1625 !important;
+    box-shadow:8px 0 16px rgba(2,7,14,.35);
+  }
+
+  #arsenal-table thead .tt-player {
+    z-index:8 !important;
+    background:#111a29 !important;
+  }
+
+  #arsenal-table th:not(.tt-player),
+  #arsenal-table td:not(.tt-player) {
+    width:102px !important;
+    padding-inline:8px !important;
+    font-size:10px;
+  }
+
+  #arsenal-table td[colspan] {
+    width:auto !important;
+    min-width:0 !important;
+  }
+}

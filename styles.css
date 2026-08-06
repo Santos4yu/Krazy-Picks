@@ -4424,45 +4424,48 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
   }
 }
 
-/* Pitch Arsenal carries wider metrics, so let phones swipe it without
-   sacrificing legibility. The player identity stays anchored while swiping. */
+/* Mobile Pitch Arsenal: one stable, full-width view with only decision-useful
+   columns. Pitch count is intentionally removed on phones to prevent crowding. */
 @media (max-width:700px) {
   .team-table-wrap:has(#arsenal-table) {
-    overflow-x:auto !important;
+    overflow-x:hidden !important;
     overflow-y:auto !important;
-    overscroll-behavior-x:contain;
-    touch-action:pan-x pan-y;
-    -webkit-overflow-scrolling:touch;
-    scrollbar-width:thin;
-    scrollbar-color:rgba(69,145,255,.55) rgba(11,19,32,.75);
+    touch-action:pan-y;
   }
 
   #arsenal-table {
-    width:600px !important;
-    min-width:600px !important;
+    width:100% !important;
+    min-width:0 !important;
     table-layout:fixed;
   }
 
   #arsenal-table .tt-player {
-    position:sticky !important;
-    left:0 !important;
-    z-index:3 !important;
-    width:190px !important;
-    min-width:190px !important;
+    position:static !important;
+    left:auto !important;
+    z-index:auto !important;
+    width:55% !important;
+    min-width:0 !important;
     background:#0d1625 !important;
-    box-shadow:8px 0 16px rgba(2,7,14,.35);
+    box-shadow:none;
   }
 
   #arsenal-table thead .tt-player {
-    z-index:8 !important;
+    z-index:auto !important;
     background:#111a29 !important;
+  }
+
+  /* PC is supporting volume data; PA, K% and wOBA are the useful mobile read. */
+  #arsenal-table th:nth-child(3),
+  #arsenal-table td:nth-child(3) {
+    display:none;
   }
 
   #arsenal-table th:not(.tt-player),
   #arsenal-table td:not(.tt-player) {
-    width:102px !important;
-    padding-inline:8px !important;
-    font-size:10px;
+    width:15% !important;
+    padding-inline:2px !important;
+    font-size:9.5px;
+    text-align:center !important;
   }
 
   #arsenal-table td[colspan] {

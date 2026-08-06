@@ -305,8 +305,6 @@ function cacheEls() {
   els.glHandFilter = document.getElementById("gl-hand-filter");
   els.glVenueFilter = document.getElementById("gl-venue-filter");
   els.gamelogStat = document.getElementById("gamelog-stat");
-  els.gamelogLineRange = document.getElementById("gamelog-line-range");
-  els.gamelogLineValue = document.getElementById("gamelog-line-value");
 
   els.teamOverlay = document.getElementById("team-overlay");
   els.teamTitle = document.getElementById("team-title");
@@ -779,7 +777,8 @@ function initialsFor(name) {
 
 function avatarHtml(playerOrProp, size = "") {
   const player = typeof playerOrProp === "string" ? playerOrProp : playerOrProp.player;
-  const headshot = typeof playerOrProp === "object" ? playerOrProp.headshot : null;
+  const originalHeadshot = typeof playerOrProp === "object" ? playerOrProp.headshot : null;
+  const headshot = originalHeadshot ? originalHeadshot.replace("/headshot/67/current", "/headshot/silo/current") : null;
   const hash = hashString(player);
   const hue = AVATAR_HUES[hash % AVATAR_HUES.length];
   const hue2 = (hue + 40) % 360;
@@ -790,7 +789,7 @@ function avatarHtml(playerOrProp, size = "") {
   const img = headshot
     ? `<img src="${escapeHtml(headshot)}" alt="" loading="lazy" onerror="this.remove()">`
     : "";
-  return `<div class="avatar${sizeClass}" style="background:linear-gradient(135deg, hsl(${hue} 80% 55%), hsl(${hue2} 80% 45%))">${escapeHtml(initials)}${img}</div>`;
+  return `<div class="avatar${sizeClass}${headshot ? " avatar-cutout" : ""}" style="background:linear-gradient(135deg, hsl(${hue} 80% 55%), hsl(${hue2} 80% 45%))">${escapeHtml(initials)}${img}</div>`;
 }
 
 /* ---------- Auth gate (Discord OAuth + Premium/Tester role) ---------- */
@@ -1553,8 +1552,6 @@ function setGameLogPreviewLine(value, settle = false) {
   const raw = Math.max(0.5, Number(value) || 0.5);
   const line = settle ? snapPropLine(raw) : raw;
   gameLogState.line = line;
-  els.gamelogLineRange.value = String(line);
-  els.gamelogLineValue.textContent = settle ? line.toFixed(1) : raw.toFixed(2);
   if (settle) {
     regradeGameLog(line);
     renderGameLogTabs();
@@ -1583,8 +1580,6 @@ async function loadGameLogStat(stat) {
     if (!res.ok || data.error) throw new Error(data.error || "Unable to load this stat");
     gameLogState.chart = data;
     regradeGameLog(gameLogState.line);
-    const values = Object.values(data).flat().map((g) => Number(g.value) || 0);
-    els.gamelogLineRange.max = String(Math.max(5.5, Math.ceil(Math.max(...values, gameLogState.line || 0)) + 2.5));
     gameLogState.window = [gameLogState.window, "l10", "l5", "l15", "l20", "h2h"].find((w) => (data[w] || []).length) || "l10";
   } catch (err) {
     els.gamelogSub.textContent = err.message || "This stat is unavailable right now.";
@@ -1619,10 +1614,6 @@ function openGameLogModal(p) {
   els.gamelogOverlay.hidden = false;
   els.gamelogTitle.textContent = `${p.player} — ${p.betType}`;
   populateGameLogStats();
-  const values = Object.values(gameLogState.chart).flat().map((g) => Number(g.value) || 0);
-  els.gamelogLineRange.max = String(Math.max(5.5, Math.ceil(Math.max(...values, p.line || 0)) + 2.5));
-  els.gamelogLineRange.value = String(p.line);
-  els.gamelogLineValue.textContent = Number(p.line).toFixed(1);
   renderGameLogTabs();
   renderGameLogChart();
 
@@ -1789,8 +1780,6 @@ function renderGameLogChart() {
           setGameLogPreviewLine(raw, true);
         } else {
           gameLogState.line = raw;
-          els.gamelogLineRange.value = String(raw);
-          els.gamelogLineValue.textContent = raw.toFixed(2);
           marker.style.top = `${Math.max(0, trackPx - (raw / max) * trackPx)}px`;
           marker.querySelector(".gl-line-tag").textContent = raw.toFixed(2);
         }
@@ -1842,8 +1831,6 @@ function wireGameLogModal() {
     });
   });
   els.gamelogStat.addEventListener("change", () => loadGameLogStat(els.gamelogStat.value));
-  els.gamelogLineRange.addEventListener("input", () => setGameLogPreviewLine(els.gamelogLineRange.value, false));
-  els.gamelogLineRange.addEventListener("change", () => setGameLogPreviewLine(els.gamelogLineRange.value, true));
 }
 
 /* ---------- Team insights modal (Batting Order & Pitch Arsenal) ---------- */

@@ -2731,10 +2731,23 @@ function wireSlate() {
     tools.forEach((item) => item.classList.toggle("active", item === button));
     const tool = button.dataset.tool;
     els.slateDate.textContent = labels[tool] || labels.attack;
+    if (tool !== "attack") {
+      els.slateRefreshBtn.hidden = true;
+      els.slateList.innerHTML = "";
+      els.slateList.hidden = true;
+      els.slateEmpty.hidden = true;
+      els.slateLoading.hidden = true;
+      els.slateError.hidden = false;
+      els.slateError.className = "tools-coming-soon";
+      const title = button.childNodes[0]?.textContent?.trim() || "New tool";
+      els.slateError.innerHTML = `<span class="coming-kicker">KRAZY PICKS LAB</span><strong>${escapeHtml(title)}</strong><p>This research module is coming soon.</p><small>Attack Board is live now and remains fully available.</small>`;
+      return;
+    }
     if (tool === "attack") {
+      els.slateRefreshBtn.hidden = false;
       els.slateList.hidden = false;
       els.slateError.hidden = true;
-      loadSlate();
+      loadSlate(true);
       return;
     }
     els.slateList.innerHTML = "";

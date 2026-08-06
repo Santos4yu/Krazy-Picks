@@ -4163,3 +4163,50 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
 @media (max-width:900px) { .tab-panel { width:min(100% - 28px,760px) !important; padding:24px 0 110px !important; } .tools-tabs { grid-template-columns:repeat(2,minmax(0,1fr)) !important; } .research-snapshot { grid-template-columns:repeat(2,minmax(0,1fr)) !important; } }
 @media (max-width:560px) { .tab-panel { width:calc(100% - 20px) !important; } .report-block { padding:17px 15px !important; } .dock-panel { bottom:10px !important; gap:5px !important; padding:7px !important; } }
 .main-menu-brandlock>img[src="/josoicon.png"] { object-fit:contain !important; border-radius:0 !important; box-shadow:0 0 70px rgba(255,155,20,.12),0 0 80px rgba(32,124,255,.10) !important; transform:none !important; }
+
+/* Premium cards: no decorative side stripe. */
+.player-profile,.report-header,.market-page-head,.tools-head,.tool-result,.admin-result-row,.slate-row { border-left-width:1px !important; }
+.report-block::after,.slate-row::before { display:none !important; }
+
+/* Attack Board player-first rows. */
+.slate-row { min-height:88px !important; padding:12px 18px !important; gap:15px !important; border-radius:14px !important; background:linear-gradient(120deg,rgba(15,23,38,.98),rgba(8,13,23,.98)) !important; }
+.slate-player-photo-wrap { position:relative; flex:0 0 70px; width:70px; height:64px; display:flex; align-items:flex-end; justify-content:center; overflow:visible; }
+.slate-player-photo { width:68px; height:72px; object-fit:contain; object-position:center bottom; filter:drop-shadow(0 8px 12px rgba(0,0,0,.45)); }
+.slate-player-score { position:absolute; right:-5px; bottom:-3px; min-width:37px; padding:3px 6px; border:1px solid rgba(255,255,255,.13); border-radius:999px; background:#090e18; color:#fff; font:800 10px var(--font-mono); text-align:center; box-shadow:0 6px 14px rgba(0,0,0,.35); }
+.slate-player-photo-wrap.slate-easy .slate-player-score { color:#55e79c; border-color:rgba(85,231,156,.32); }
+.slate-player-photo-wrap.slate-medium .slate-player-score { color:#ffc65a; border-color:rgba(255,198,90,.32); }
+.slate-player-photo-wrap.slate-hard .slate-player-score { color:#ff7187; border-color:rgba(255,113,135,.32); }
+.slate-pitcher { font-size:15px !important; letter-spacing:-.2px; }
+.slate-sub { line-height:1.55 !important; }
+
+/* Performance-history modal. */
+.gamelog-modal { width:min(940px,calc(100vw - 32px)) !important; max-width:940px !important; padding:28px !important; border:1px solid rgba(87,143,231,.25) !important; border-radius:20px !important; background:linear-gradient(145deg,#101827,#080d16) !important; box-shadow:0 36px 110px rgba(0,0,0,.76),inset 0 1px rgba(255,255,255,.04) !important; }
+.gamelog-modal .modal-head { padding-bottom:18px; border-bottom:1px solid rgba(100,139,198,.14); }
+.gamelog-modal .modal-title { font-size:22px !important; }
+.gamelog-tiles { grid-template-columns:repeat(5,minmax(0,1fr)) !important; gap:8px !important; padding:0 !important; background:transparent !important; border:0 !important; }
+.gamelog-tile { min-height:84px !important; padding:13px 14px !important; border:1px solid rgba(104,139,190,.16) !important; border-radius:12px !important; background:rgba(8,13,22,.78) !important; }
+.gamelog-tile:hover:not(:disabled) { border-color:rgba(72,157,255,.42) !important; transform:translateY(-2px); }
+.gamelog-tile.active { border-color:rgba(255,166,44,.55) !important; background:linear-gradient(145deg,rgba(255,153,20,.13),rgba(21,94,183,.10)) !important; box-shadow:0 12px 28px rgba(0,0,0,.24) !important; }
+.gamelog-tile[data-window="h2h"] { grid-column:auto !important; }
+.gl-tile-label { white-space:normal !important; line-height:1.25 !important; }
+.gamelog-subfilters { padding:12px !important; border:1px solid rgba(104,139,190,.14); border-radius:12px; background:rgba(7,11,19,.56); }
+.gl-filter-chip { min-height:34px; border-radius:8px !important; }
+.gamelog-sub { margin:18px 2px 12px !important; color:#b4bfd0 !important; }
+.gamelog-chart { min-height:245px !important; padding:26px 16px 10px !important; border-color:rgba(104,139,190,.18) !important; border-radius:15px !important; background:linear-gradient(180deg,rgba(17,26,42,.94),rgba(8,13,22,.94)) !important; }
+.gl-col { flex-basis:58px !important; min-width:58px !important; }
+.gl-bar { border-radius:9px 9px 5px 5px !important; box-shadow:0 8px 18px rgba(255,158,24,.12); }
+.gl-bar-under { box-shadow:0 8px 18px rgba(255,83,109,.10); }
+.gl-date { margin-top:4px !important; color:#75839a !important; font-size:9px !important; white-space:nowrap; }
+@media (max-width:700px) {
+  .slate-row { min-height:82px !important; padding:10px 11px !important; gap:10px !important; }
+  .slate-player-photo-wrap { flex-basis:57px; width:57px; height:58px; }
+  .slate-player-photo { width:57px; height:64px; }
+  .slate-player-score { right:-4px; font-size:8px; min-width:32px; }
+  .slate-sub { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .gamelog-modal { width:100vw !important; max-width:none !important; max-height:92vh !important; padding:20px 14px calc(24px + env(safe-area-inset-bottom,0px)) !important; border-right:0 !important; border-bottom:0 !important; border-left:0 !important; border-radius:20px 20px 0 0 !important; }
+  .gamelog-tiles { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
+  .gamelog-tile[data-window="h2h"] { grid-column:1/-1 !important; }
+  .gamelog-tile { min-height:68px !important; }
+  .gamelog-chart { min-height:210px !important; padding-inline:10px !important; }
+  .gl-col { flex-basis:44px !important; min-width:44px !important; }
+}

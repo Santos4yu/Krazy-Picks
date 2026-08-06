@@ -1631,7 +1631,7 @@ function renderGameLogTabs() {
     const rateEl = btn.querySelector(".gl-tile-rate");
     const avgEl = btn.querySelector(".gl-tile-avg");
     if (w === "h2h") {
-      labelEl.textContent = gameLogState.opponent ? `H2H (${gameLogState.opponent})` : "H2H";
+      labelEl.textContent = gameLogState.opponent ? `CAREER H2H · ${gameLogState.opponent}` : "CAREER H2H";
     }
     if (!hasData || !games.length) {
       rateEl.textContent = hasData ? "0 g" : "—";
@@ -1668,7 +1668,7 @@ function renderGameLogChart() {
   }
 
   const label = gameLogState.window === "h2h"
-    ? `Every game vs ${gameLogState.opponent || "this opponent"} this season${filterSuffix}`
+    ? `All meetings vs ${gameLogState.opponent || "this opponent"} across available seasons${filterSuffix}`
     : `Last ${games.length} games${filterSuffix}`;
   const overCount = games.filter((g) => g.over).length;
   els.gamelogSub.textContent = `${label} — ${overCount}/${games.length} over the ${gameLogState.line} line (${Math.round((overCount / games.length) * 100)}%).`;
@@ -1690,7 +1690,7 @@ function renderGameLogChart() {
         </div>
       </div>
       <span class="gl-opp">${escapeHtml(g.opponent || "")}</span>
-      <span class="gl-date">${escapeHtml(g.date || "")}</span>
+      <span class="gl-date">${escapeHtml(gameLogState.window === "h2h" ? (g.fullDate || g.date || "") : (g.date || ""))}</span>
     `;
     holder.appendChild(col);
   });
@@ -2831,7 +2831,10 @@ function renderSlate(data) {
 
     row.innerHTML = `
       <span class="slate-rank">${rankEmoji}</span>
-      <span class="slate-score-badge ${difficultyClass}">${difficultyEmoji} ${e.score.toFixed(1)}</span>
+      <span class="slate-player-photo-wrap ${difficultyClass}">
+        <img class="slate-player-photo" src="https://img.mlbstatic.com/mlb-photos/image/upload/w_180,q_auto:best/v1/people/${e.pitcher_id}/headshot/silo/current" alt="${escapeHtml(e.pitcher)}" loading="lazy" onerror="this.src='https://img.mlbstatic.com/mlb-photos/image/upload/w_180,q_auto:best/v1/people/${e.pitcher_id}/headshot/67/current';this.onerror=null;" />
+        <span class="slate-player-score">${e.score.toFixed(1)}</span>
+      </span>
       <span class="slate-main">
         <span class="slate-pitcher">👤 ${escapeHtml(e.pitcher)} <span class="slate-hand">(${escapeHtml(e.hand)})</span>${e.team ? ` · ${escapeHtml(e.team)}` : ""}</span>
         <span class="slate-sub">⚔️ vs ${escapeHtml(e.opponent_abbr || e.opponent)} · 📊 ERA ${e.era.toFixed(2)} · HR/9 ${e.hr9.toFixed(2)} · K/9 ${e.k9.toFixed(2)} · 🛡️ ${bpText}</span>

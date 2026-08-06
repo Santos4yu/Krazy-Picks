@@ -687,6 +687,38 @@ def get_vs_team_splits(player_id: int, opp_team_id: int,
     }
 
 
+def get_vs_team_game_log_history(player_id: int, opp_team_id: int,
+                                 line: float, prop_type: str = "hits",
+                                 seasons: int = 4,
+                                 include_hand_venue: bool = False) -> list[dict]:
+    """Return dated H2H game results across recent seasons, newest first."""
+    all_games = []
+    current_season = int(SEASON)
+    for season in range(current_season, current_season - max(1, seasons), -1):
+        data = _get(f"/people/{player_id}/stats", {
+            "stats": "gameLog", "group": "hitting", "season": season, "sportId": 1,
+        }, cache_key=f"gamelog_hit_{player_id}_{season}_h2h")
+        raw = ((data or {}).get("stats") or [{}])[0].get("splits", [])
+        all_games.extend(g for g in raw if g.get("opponent", {}).get("id") == opp_team_id)
+
+    if not all_games:
+        return []
+    hands = _resolve_opp_pitcher_hands(all_games) if include_hand_venue else {}
+    result = []
+    for game in all_games:
+        game_pk = (game.get("game") or {}).get("gamePk")
+        date_str = game.get("date", "")
+        result.append({
+            "date": date_str,
+            "season": int(date_str[:4]) if len(date_str) >= 4 and date_str[:4].isdigit() else None,
+            "opponent": (game.get("opponent") or {}).get("name", ""),
+            "value": _stat_from_game(game.get("stat") or {}, prop_type),
+            "isHome": game.get("isHome"),
+            "oppHand": hands.get(game_pk),
+        })
+    return sorted(result, key=lambda game: game.get("date", ""), reverse=True)
+
+
 # ── 4. Pitcher metrics ────────────────────────────────────────────────────────
 
 def get_pitcher_metrics(pitcher_name: str) -> dict:

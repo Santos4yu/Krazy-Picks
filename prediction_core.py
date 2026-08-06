@@ -1195,6 +1195,8 @@ def format_response(*, player_name, team_abbr, headshot, stat_label, prop_type, 
                 "value": g.get("value", 0),
                 "opponent": stats_mlb._MLB_TEAM_ABBR.get(g.get("opponent", ""), (g.get("opponent") or "")[:3].upper()),
                 "date": _short_date(g.get("date", "")),
+                "fullDate": g.get("date", ""),
+                "season": g.get("season"),
             }
             for g in (splits.get("recent_games") or [])[:5]
         ][::-1],
@@ -1509,8 +1511,10 @@ def get_game_log_filters(player_name: str, prop_type: str, line: float, opp_team
 
     h2h_log = None
     if opp_team_id:
-        vs_team = stats_mlb.get_vs_team_splits(player_id, int(opp_team_id), line, prop_type, include_hand_venue=True)
-        h2h_log = vs_team.get("game_log")
+        h2h_log = stats_mlb.get_vs_team_game_log_history(
+            player_id, int(opp_team_id), line, prop_type,
+            seasons=4, include_hand_venue=True,
+        )
 
     return _build_game_log_chart(splits.get("game_log") or [], line, h2h_log=h2h_log)
 

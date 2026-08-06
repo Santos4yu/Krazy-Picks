@@ -4162,3 +4162,4 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
 .tools-coming-soon small { color:#667389; }
 @media (max-width:900px) { .tab-panel { width:min(100% - 28px,760px) !important; padding:24px 0 110px !important; } .tools-tabs { grid-template-columns:repeat(2,minmax(0,1fr)) !important; } .research-snapshot { grid-template-columns:repeat(2,minmax(0,1fr)) !important; } }
 @media (max-width:560px) { .tab-panel { width:calc(100% - 20px) !important; } .report-block { padding:17px 15px !important; } .dock-panel { bottom:10px !important; gap:5px !important; padding:7px !important; } }
+.main-menu-brandlock>img[src="/josoicon.png"] { object-fit:contain !important; border-radius:0 !important; box-shadow:0 0 70px rgba(255,155,20,.12),0 0 80px rgba(32,124,255,.10) !important; transform:none !important; }

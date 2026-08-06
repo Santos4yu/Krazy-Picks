@@ -161,6 +161,8 @@ async function init() {
     console.error("wireChromeAutoHide failed:", err);
   }
   wireCardBorderGlow();
+  wireTabs();
+  wireMainMenu();
 
   try {
     const res = await fetch(DATA_SOURCE, { cache: "no-store" });
@@ -170,11 +172,9 @@ async function init() {
   } catch (err) {
     console.error(err);
     els.emptyState.textContent = `Couldn't load predictions.json — ${err.message}`;
-    return;
+    state.props = [];
   }
 
-  wireTabs();
-  wireMainMenu();
   clearIntroAnimations();
   wireSearch();
   wireLinePicker();

@@ -792,6 +792,11 @@ function avatarHtml(playerOrProp, size = "") {
 /* ---------- Auth gate (Discord OAuth + Premium/Tester role) ---------- */
 
 async function checkAuth() {
+  // Krazy Picks is public. Keep the old OAuth implementation below dormant
+  // so no login request, Discord membership check, or account UI is used.
+  els.appShell.classList.remove("app-shell-hidden");
+  return;
+
   // The OAuth callback redirects back here with ?auth=success|denied|error
   // (it can't show a message itself -- it's a bare redirect). Surface it
   // once, then scrub the query param so a refresh doesn't repeat it.

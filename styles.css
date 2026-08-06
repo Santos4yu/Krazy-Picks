@@ -4005,6 +4005,7 @@ body::before, body::after, .grid-bg, .vortex-swirl, .glow-orb { display:none !im
 }
 
 /* Krazy Picks final cascade — intentionally last. */
+.auth-gate, .user-badge { display:none !important; }
 :root, :root[data-theme="dark"], :root[data-theme="grey"], :root[data-theme="light"] {
   --bg:#05070d; --bg-elevated:#0b0f18; --panel:rgba(12,17,28,.9); --panel-border:rgba(93,151,255,.16);
   --text:#f4f7fb; --text-dim:#9aa6ba; --text-faint:#647086; --accent:#ff9d16; --accent-soft:#ffd15c;

@@ -62,7 +62,9 @@ SESSION_TTL_SEC = 24 * 3600  # re-checks Discord role at most once a day per use
 # (login.py/callback.py) is untouched, so flipping this back to false (or
 # unsetting it) restores Discord-gated access exactly as it was, with no
 # code changes needed.
-FREE_BETA_MODE = os.getenv("FREE_BETA_MODE", "false").strip().lower() in ("1", "true", "yes")
+# Krazy Picks is a standalone public site and no longer depends on the
+# original owner's Discord server, membership, or roles.
+FREE_BETA_MODE = True
 
 
 def _beta_payload() -> dict:

@@ -2658,7 +2658,10 @@ def get_pitcher_arm_slot(pitcher_id: int) -> dict:
     (straight over the top). The human-readable range label is presentation
     only; the exact Statcast angle remains the source of truth.
     """
-    cache_file = CACHE_DIR / f"savant_arm_angles_{SEASON}.json"
+    # Keep this cache versioned. An earlier leaderboard response could be
+    # incomplete while still returning HTTP 200, which poisoned the cache and
+    # made valid pitchers appear to have no arm-angle data.
+    cache_file = CACHE_DIR / f"savant_arm_angles_v2_{SEASON}.json"
     table = None
     if cache_file.exists():
         try:
@@ -2666,7 +2669,7 @@ def get_pitcher_arm_slot(pitcher_id: int) -> dict:
                 table = json.loads(cache_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             pass
-    if table is None:
+    def _download_table():
         import csv as _csv
         import io as _io
         try:
@@ -2674,18 +2677,48 @@ def get_pitcher_arm_slot(pitcher_id: int) -> dict:
                 "https://baseballsavant.mlb.com/leaderboard/pitcher-arm-angles",
                 params={"season": SEASON, "gameType": "R", "groupBy": "Season", "min": 1, "csv": "true"},
                 timeout=20,
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+                    "Accept": "text/csv,text/plain;q=0.9,*/*;q=0.8",
+                    "Referer": "https://baseballsavant.mlb.com/leaderboard/pitcher-arm-angles",
+                },
             )
             if not response.ok:
-                return {}
-            table = {row.get("pitcher", ""): row for row in _csv.DictReader(_io.StringIO(response.text))}
+                return None
+            rows = list(_csv.DictReader(_io.StringIO(response.text.lstrip("\ufeff"))))
+            fresh = {
+                str(row.get("pitcher", "")).strip(): row
+                for row in rows
+                if str(row.get("pitcher", "")).strip() and row.get("ball_angle") not in (None, "")
+            }
+            # A normal season response contains hundreds of pitchers. Never
+            # cache a small/partial success page as the complete leaderboard.
+            return fresh if len(fresh) >= 100 else None
+        except requests.RequestException:
+            return None
+
+    if table is None:
+        table = _download_table()
+        if table:
             try:
                 cache_file.write_text(json.dumps(table), encoding="utf-8")
             except OSError:
                 pass
-        except requests.RequestException:
-            return {}
-    row = (table or {}).get(str(pitcher_id))
+
+    pitcher_key = str(pitcher_id).strip()
+    row = (table or {}).get(pitcher_key)
+    if not row:
+        # The leaderboard can occasionally return a partial HTTP-200 response.
+        # Retry the official source once for a cache miss before showing the
+        # honest unavailable state in the UI.
+        refreshed = _download_table()
+        row = (refreshed or {}).get(pitcher_key)
+        if refreshed and row:
+            table = refreshed
+            try:
+                cache_file.write_text(json.dumps(table), encoding="utf-8")
+            except OSError:
+                pass
     if not row:
         return {}
     try:

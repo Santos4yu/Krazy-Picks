@@ -2984,10 +2984,14 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
     from datetime import datetime, timezone as _tz
 
     stadium = STADIUM_DATA.get(home_team_abbr.upper())
-    if not stadium:
+    if not stadium and not game_pk:
         return {"error": "Stadium not found"}
 
-    lat, lon, cf_bearing, is_dome = stadium
+    # With a game id, the official feed below supplies the actual venue,
+    # coordinates and field orientation. The static team map is only a
+    # fallback; requiring it first broke weather whenever an abbreviation
+    # changed or MLB used a temporary/neutral venue.
+    lat, lon, cf_bearing, is_dome = stadium or (None, None, 0, False)
     venue_name = ""
     roof_type = "Fixed" if is_dome else "Open"
     official_condition = ""
@@ -3086,6 +3090,9 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", gam
             "condition": official_condition, "forecast": False,
             "source": "Official MLB game feed fallback",
         }
+
+    if lat is None or lon is None:
+        return {"error": "Official game venue coordinates unavailable"}
 
     # ── Try hourly game-time forecast first ───────────────────────────────────
     if game_time_utc:

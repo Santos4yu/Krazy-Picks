@@ -485,9 +485,9 @@ def compute_prediction(player_name: str, prop_type: str, stat_label: str, line: 
     is_home = bool(matchup.get("is_home"))
     # PARK_FACTOR is keyed by the HOME team's name — that's the batter's own
     # team when they're home, otherwise the opponent (whose park it is tonight).
-    home_team_name = (found.get("team") or "") if is_home else (matchup.get("opponent") or "")
+    home_team_name = matchup.get("home_team_name") or ((found.get("team") or "") if is_home else (matchup.get("opponent") or ""))
     park_factor = stats_mlb.PARK_FACTOR.get(home_team_name, 1.0)
-    home_abbr = stats_mlb._MLB_TEAM_ABBR.get(home_team_name, "")
+    home_abbr = matchup.get("home_abbr") or stats_mlb._MLB_TEAM_ABBR.get(home_team_name, "")
     opp_team_id = matchup.get("opp_team_id")
     home_team_id = matchup.get("home_team_id")
     pitcher_name = matchup.get("pitcher") or ""
@@ -647,8 +647,8 @@ def compute_k_prop(player_id, canonical_name, team_abbr, matchup, line, side, st
                     prop_type: str = "pitcher_strikeouts") -> dict:
     opp_team_id = matchup.get("opp_team_id")
     is_home = bool(matchup.get("is_home"))
-    home_team_name = (team_abbr or "") if is_home else (matchup.get("opponent") or "")
-    home_abbr = stats_mlb._MLB_TEAM_ABBR.get(home_team_name, "")
+    home_team_name = matchup.get("home_team_name") or ((team_abbr or "") if is_home else (matchup.get("opponent") or ""))
+    home_abbr = matchup.get("home_abbr") or stats_mlb._MLB_TEAM_ABBR.get(home_team_name, "")
     park_factor = stats_mlb.PARK_FACTOR.get(home_team_name, 1.0)
 
     # analyze.grade_pick_both()'s K-rate matchup risk branch is gated on the

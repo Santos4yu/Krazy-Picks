@@ -4212,12 +4212,15 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
 }
 
 /* Interactive performance lab + premium team scouting cards. */
-.gamelog-controls { display:block; width:min(320px,100%); margin:18px 0 12px; }
+.gamelog-controls { display:block; width:100%; margin:18px 0 12px; }
 .gamelog-control { display:flex; min-width:0; min-height:76px; flex-direction:column; justify-content:center; gap:8px; padding:12px 14px; border:1px solid rgba(99,146,218,.17); border-radius:12px; background:rgba(5,10,18,.68); }
 .gamelog-control>span { color:#7f8da4; font:800 9px var(--font-mono); letter-spacing:1.4px; }
 .gamelog-control>span strong { float:right; color:#55b7ff; font-size:15px; letter-spacing:0; }
 .gamelog-control select { width:100%; padding:9px 34px 9px 11px; border:1px solid rgba(65,143,255,.3); border-radius:8px; outline:none; color:#f5f8fd; background:#0c1421; font:700 13px var(--font-body); }
 .gamelog-control select:focus { border-color:#55b7ff; box-shadow:0 0 0 3px rgba(55,145,255,.12); }
+.gamelog-stat-control { min-height:60px; flex-direction:row; align-items:center; justify-content:flex-start; gap:16px; }
+.gamelog-stat-control>span { flex:0 0 auto; }
+.gamelog-stat-control select { flex:1; min-width:0; }
 .gamelog-chart { display:block !important; overflow-x:auto !important; overflow-y:hidden !important; position:relative; }
 .gamelog-chart-track { position:relative; display:flex; width:max-content; min-width:100%; align-items:flex-end; gap:8px; padding:0 0 4px; }
 .gl-line-marker { left:0 !important; right:0 !important; height:24px; transform:translateY(-50%); border-top:0 !important; z-index:6; pointer-events:auto !important; cursor:ns-resize; touch-action:none; }
@@ -4232,6 +4235,14 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
 .search-result-item .avatar-cutout.avatar-sm { width:42px; height:45px; margin:-5px 0; }
 .player-profile .avatar-cutout.avatar-lg { width:72px; height:74px; margin:-8px 2px -7px -3px; }
 .player-profile .profile-head { min-height:66px; }
+
+/* Turn the dense verdict sentence into a compact premium metric rail. */
+.report-header .verdict-strip { display:grid !important; grid-template-columns:auto minmax(0,1fr); align-items:stretch !important; gap:8px !important; margin-top:14px !important; padding:0 !important; border:0 !important; background:transparent !important; }
+.report-header .verdict-pill { display:flex; align-items:center; justify-content:center; min-width:92px; padding:10px 12px !important; border:1px solid rgba(76,228,137,.22); border-radius:9px !important; background:rgba(43,210,112,.12) !important; font:800 11px var(--font-mono) !important; }
+.report-header .verdict-detail { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; min-width:0; color:inherit !important; }
+.verdict-metric { display:flex; min-width:0; min-height:48px; flex-direction:column; justify-content:center; gap:4px; padding:7px 10px; border:1px solid rgba(82,133,211,.14); border-radius:9px; background:rgba(5,10,18,.55); }
+.verdict-metric small { overflow:hidden; color:#697890; font:700 8px var(--font-mono); letter-spacing:.7px; text-overflow:ellipsis; text-transform:uppercase; white-space:nowrap; }
+.verdict-metric strong { overflow:hidden; color:#dce5f2; font-size:10px; line-height:1.3; text-overflow:ellipsis; white-space:nowrap; }
 
 .team-modal { width:min(860px,calc(100vw - 48px)) !important; max-width:860px !important; max-height:84vh !important; padding:20px !important; border:1px solid rgba(73,139,240,.24) !important; border-radius:17px !important; background:linear-gradient(145deg,#101827,#080d16) !important; box-shadow:0 36px 110px rgba(0,0,0,.76),inset 0 1px rgba(255,255,255,.04) !important; }
 .team-tabs { display:flex; gap:6px; padding:5px; border:1px solid rgba(92,139,208,.15); border-radius:11px; background:rgba(5,10,18,.7); }
@@ -4256,6 +4267,10 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
 
 @media (max-width:700px) {
   .gamelog-controls { width:100%; }
+  .gamelog-stat-control { align-items:flex-start; flex-direction:column; gap:8px; }
+  .report-header .verdict-strip { grid-template-columns:1fr !important; }
+  .report-header .verdict-detail { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .report-header .verdict-pill { min-height:38px; }
   .gamelog-control { min-height:66px; }
   .gamelog-chart-track { gap:7px; }
   .team-modal { width:100vw !important; max-width:none !important; max-height:94vh !important; padding:18px 12px calc(22px + env(safe-area-inset-bottom,0px)) !important; border-right:0 !important; border-bottom:0 !important; border-left:0 !important; border-radius:20px 20px 0 0 !important; }

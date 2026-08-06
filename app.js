@@ -1779,9 +1779,9 @@ function renderGameLogChart() {
         if (settle) {
           setGameLogPreviewLine(raw, true);
         } else {
-          gameLogState.line = raw;
+          const displayLine = snapPropLine(raw);
           marker.style.top = `${Math.max(0, trackPx - (raw / max) * trackPx)}px`;
-          marker.querySelector(".gl-line-tag").textContent = raw.toFixed(2);
+          marker.querySelector(".gl-line-tag").textContent = displayLine.toFixed(1);
         }
       };
       marker.onpointermove = (ev) => update(ev, false);
@@ -2169,7 +2169,12 @@ function fillHeader(node, p) {
   node.querySelector(".score-tier-icon").textContent = p.tierIcon || "";
 
   node.querySelector(".verdict-pill").textContent = p.verdict || "";
-  node.querySelector(".verdict-detail").textContent = p.verdictDetail || "";
+  const verdictParts = String(p.verdictDetail || "").split(/\s*\u00b7\s*/).filter(Boolean);
+  node.querySelector(".verdict-detail").innerHTML = verdictParts.map((part) => {
+    const splitAt = part.indexOf(":");
+    if (splitAt < 0) return `<span class="verdict-metric"><strong>${escapeHtml(part)}</strong></span>`;
+    return `<span class="verdict-metric"><small>${escapeHtml(part.slice(0, splitAt))}</small><strong>${escapeHtml(part.slice(splitAt + 1).trim())}</strong></span>`;
+  }).join("");
 
   node.querySelector(".unit-value").textContent = p.unitSize || "—";
 }

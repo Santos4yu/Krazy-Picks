@@ -152,6 +152,17 @@
       <h3 class="modal-title" id="gamelog-title">Game Log</h3>
       <button type="button" class="modal-close" id="gamelog-close" aria-label="Close">✕</button>
     </div>
+    <div class="gamelog-controls">
+      <label class="gamelog-control gamelog-stat-control">
+        <span>STAT VIEW</span>
+        <select id="gamelog-stat" aria-label="Change performance stat"></select>
+      </label>
+      <label class="gamelog-control gamelog-line-control">
+        <span>PROP LINE <strong id="gamelog-line-value">1.5</strong></span>
+        <input id="gamelog-line-range" type="range" min="0.5" max="10.5" step="0.01" value="1.5" aria-label="Adjust prop line">
+        <small>Drag freely — releases to the nearest .5 line</small>
+      </label>
+    </div>
     <div class="gamelog-tiles" id="gamelog-tabs">
       <button type="button" class="gamelog-tile" data-window="l5">
         <span class="gl-tile-label">L5</span>
@@ -221,7 +232,7 @@
           <thead>
             <tr>
               <th class="tt-player">Player</th>
-              <th>AB</th>
+              <th id="order-volume-head">AB</th>
               <th>AVG</th>
               <th>HR</th>
               <th>RBI</th>

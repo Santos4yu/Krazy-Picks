@@ -1196,6 +1196,8 @@ def format_response(*, player_name, team_abbr, headshot, stat_label, prop_type, 
                 "opponent": stats_mlb._MLB_TEAM_ABBR.get(g.get("opponent", ""), (g.get("opponent") or "")[:3].upper()),
                 "date": _short_date(g.get("date", "")),
                 "fullDate": g.get("date", ""),
+                "season": str(g.get("date", ""))[:4],
+                "fullDate": g.get("date", ""),
                 "season": g.get("season"),
             }
             for g in (splits.get("recent_games") or [])[:5]
@@ -1492,14 +1494,10 @@ def get_game_log_filters(player_name: str, prop_type: str, line: float, opp_team
     which would undo the site's existing prediction-latency work if it ran
     on every card load instead of only when a user actually opens this view.
 
-    Batter props only: a pitcher's start faces a whole lineup of both
-    hands each game, so "the game's handedness" isn't a coherent per-game
-    concept the way it is for a batter facing one starter. Returns {} for
-    pitcher prop_types.
+    Pitcher props are supported too, but their handedness control stays
+    hidden because a starter faces a mixed lineup rather than one opposing
+    pitcher hand.
     """
-    if prop_type in PITCHER_PROP_TYPES:
-        return {}
-
     matches = vortex_research.fuzzy_search(player_name)
     if not matches:
         raise PlayerNotFound(f"Couldn't find an MLB player matching \"{player_name}\".")
@@ -1773,7 +1771,7 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
                 # closest available approximation (misses HBP/SF, both rare).
                 _bvp_pa_approx = bvp.get("ab", 0) + bvp.get("bb", 0)
                 vs_pitcher = {
-                    "ab": bvp.get("ab"), "avg": bvp.get("avg"), "hr": bvp.get("hr"),
+                    "ab": bvp.get("ab"), "hits": bvp.get("hits"), "avg": bvp.get("avg"), "hr": bvp.get("hr"),
                     "rbi": bvp.get("rbi"), "ops": bvp.get("ops"),
                     "k_pct": round(bvp["k"] / _bvp_pa_approx * 100, 1) if _bvp_pa_approx else None,
                     "sample": bvp.get("sample"),

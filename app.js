@@ -304,6 +304,9 @@ function cacheEls() {
   els.gamelogSubfilters = document.getElementById("gamelog-subfilters");
   els.glHandFilter = document.getElementById("gl-hand-filter");
   els.glVenueFilter = document.getElementById("gl-venue-filter");
+  els.gamelogStat = document.getElementById("gamelog-stat");
+  els.gamelogLineRange = document.getElementById("gamelog-line-range");
+  els.gamelogLineValue = document.getElementById("gamelog-line-value");
 
   els.teamOverlay = document.getElementById("team-overlay");
   els.teamTitle = document.getElementById("team-title");
@@ -314,6 +317,7 @@ function cacheEls() {
   els.teamViewArsenal = document.getElementById("team-view-arsenal");
   els.orderFilterRow = document.getElementById("order-filter-row");
   els.orderTbody = document.getElementById("order-tbody");
+  els.orderVolumeHead = document.getElementById("order-volume-head");
   els.orderEmpty = document.getElementById("order-empty");
   els.arsenalFilterRow = document.getElementById("arsenal-filter-row");
   els.arsenalTbody = document.getElementById("arsenal-tbody");
@@ -1532,12 +1536,74 @@ function renderReport(p) {
 let gameLogState = {
   chart: null, line: null, player: "", opponent: "", window: "l10",
   handFilter: "all", venueFilter: "all", handDataLoaded: false, teamId: null,
+  stat: "", isPitcher: false, fetchToken: 0,
 };
+
+function snapPropLine(value) {
+  return Math.max(0.5, Math.round(Number(value) - 0.5) + 0.5);
+}
+
+function regradeGameLog(line) {
+  Object.values(gameLogState.chart || {}).forEach((games) => {
+    (games || []).forEach((game) => { game.over = Number(game.value) >= line; });
+  });
+}
+
+function setGameLogPreviewLine(value, settle = false) {
+  const raw = Math.max(0.5, Number(value) || 0.5);
+  const line = settle ? snapPropLine(raw) : raw;
+  gameLogState.line = line;
+  els.gamelogLineRange.value = String(line);
+  els.gamelogLineValue.textContent = settle ? line.toFixed(1) : raw.toFixed(2);
+  if (settle) {
+    regradeGameLog(line);
+    renderGameLogTabs();
+  }
+  renderGameLogChart();
+}
+
+function populateGameLogStats() {
+  const stats = gameLogState.isPitcher ? PITCHER_STATS : BATTER_STATS;
+  els.gamelogStat.innerHTML = stats.map((stat) => `<option value="${escapeHtml(stat)}">${escapeHtml(stat)}</option>`).join("");
+  els.gamelogStat.value = gameLogState.stat;
+}
+
+async function loadGameLogStat(stat) {
+  const token = ++gameLogState.fetchToken;
+  gameLogState.stat = stat;
+  els.gamelogStat.disabled = true;
+  els.gamelogChart.classList.add("is-loading");
+  els.gamelogTitle.textContent = `${gameLogState.player} — ${stat}`;
+  try {
+    const url = `/api/game-log-filters?player=${encodeURIComponent(gameLogState.player)}&stat=${encodeURIComponent(stat)}&line=${gameLogState.line}` +
+      (gameLogState.teamId ? `&teamId=${gameLogState.teamId}` : "");
+    const res = await fetch(url);
+    const data = await res.json();
+    if (token !== gameLogState.fetchToken) return;
+    if (!res.ok || data.error) throw new Error(data.error || "Unable to load this stat");
+    gameLogState.chart = data;
+    regradeGameLog(gameLogState.line);
+    const values = Object.values(data).flat().map((g) => Number(g.value) || 0);
+    els.gamelogLineRange.max = String(Math.max(5.5, Math.ceil(Math.max(...values, gameLogState.line || 0)) + 2.5));
+    gameLogState.window = [gameLogState.window, "l10", "l5", "l15", "l20", "h2h"].find((w) => (data[w] || []).length) || "l10";
+  } catch (err) {
+    els.gamelogSub.textContent = err.message || "This stat is unavailable right now.";
+  } finally {
+    if (token === gameLogState.fetchToken) {
+      els.gamelogStat.disabled = false;
+      els.gamelogChart.classList.remove("is-loading");
+      renderGameLogTabs();
+      renderGameLogChart();
+    }
+  }
+}
 
 function openGameLogModal(p) {
   gameLogState.chart = p.gameLogChart || {};
   gameLogState.line = p.line;
   gameLogState.player = p.player;
+  gameLogState.stat = p.betType;
+  gameLogState.isPitcher = PITCHER_STATS.includes(p.betType);
   gameLogState.opponent = (p.matchup && p.matchup.opponent) || "";
   gameLogState.handFilter = "all";
   gameLogState.venueFilter = "all";
@@ -1552,6 +1618,11 @@ function openGameLogModal(p) {
 
   els.gamelogOverlay.hidden = false;
   els.gamelogTitle.textContent = `${p.player} — ${p.betType}`;
+  populateGameLogStats();
+  const values = Object.values(gameLogState.chart).flat().map((g) => Number(g.value) || 0);
+  els.gamelogLineRange.max = String(Math.max(5.5, Math.ceil(Math.max(...values, p.line || 0)) + 2.5));
+  els.gamelogLineRange.value = String(p.line);
+  els.gamelogLineValue.textContent = Number(p.line).toFixed(1);
   renderGameLogTabs();
   renderGameLogChart();
 
@@ -1560,20 +1631,21 @@ function openGameLogModal(p) {
   // in the data for free. Pitcher props don't get a hand filter at all --
   // one start faces a whole lineup of both hands, so "the game's
   // handedness" isn't a coherent concept the way it is for a batter.
-  const isPitcherProp = PITCHER_STATS.includes(p.betType);
+  const isPitcherProp = gameLogState.isPitcher;
   els.glHandFilter.hidden = isPitcherProp;
   renderGameLogSubfilters();
   if (!isPitcherProp) fetchGameLogHandedness(p);
 }
 
 async function fetchGameLogHandedness(p) {
+  const requestedStat = p.betType;
   els.glHandFilter.querySelectorAll(".gl-filter-chip").forEach((b) => { b.disabled = true; });
   try {
     const url = `/api/game-log-filters?player=${encodeURIComponent(p.player)}&stat=${encodeURIComponent(p.betType)}&line=${p.line}` +
       (gameLogState.teamId ? `&teamId=${gameLogState.teamId}` : "");
     const res = await fetch(url);
     const data = await res.json();
-    if (res.ok && !data.error) {
+    if (res.ok && !data.error && gameLogState.stat === requestedStat) {
       // Merge per-window, don't replace wholesale -- teamInsightsParams
       // (and so gameLogState.teamId) can be null when the lineup/pitcher
       // isn't confirmed yet, which means THIS fetch can't resolve H2H even
@@ -1679,6 +1751,8 @@ function renderGameLogChart() {
   const line = gameLogState.line;
   const trackPx = 130;
   const max = Math.max(...games.map((g) => g.value), typeof line === "number" ? line : 0, 1);
+  const track = document.createElement("div");
+  track.className = "gamelog-chart-track";
   games.forEach((g) => {
     const col = document.createElement("div");
     col.className = "gl-col";
@@ -1692,7 +1766,7 @@ function renderGameLogChart() {
       <span class="gl-opp">${escapeHtml(g.opponent || "")}</span>
       <span class="gl-date">${escapeHtml(gameLogState.window === "h2h" ? (g.fullDate || g.date || "") : (g.date || ""))}</span>
     `;
-    holder.appendChild(col);
+    track.appendChild(col);
   });
 
   if (typeof line === "number") {
@@ -1700,9 +1774,38 @@ function renderGameLogChart() {
     const marker = document.createElement("div");
     marker.className = "gl-line-marker";
     marker.style.top = `${topPx}px`;
-    marker.innerHTML = `<span class="gl-line-tag">${line}</span>`;
-    holder.appendChild(marker);
+    marker.innerHTML = `<span class="gl-line-tag">${Number(line).toFixed(1)}</span>`;
+    marker.setAttribute("role", "slider");
+    marker.setAttribute("aria-label", "Drag prop line");
+    marker.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      marker.setPointerCapture(event.pointerId);
+      const bounds = track.getBoundingClientRect();
+      const update = (ev, settle) => {
+        const chartTop = bounds.top;
+        const relative = Math.max(0, Math.min(trackPx, chartTop + trackPx - ev.clientY));
+        const raw = Math.max(0.5, (relative / trackPx) * max);
+        if (settle) {
+          setGameLogPreviewLine(raw, true);
+        } else {
+          gameLogState.line = raw;
+          els.gamelogLineRange.value = String(raw);
+          els.gamelogLineValue.textContent = raw.toFixed(2);
+          marker.style.top = `${Math.max(0, trackPx - (raw / max) * trackPx)}px`;
+          marker.querySelector(".gl-line-tag").textContent = raw.toFixed(2);
+        }
+      };
+      marker.onpointermove = (ev) => update(ev, false);
+      marker.onpointerup = (ev) => {
+        marker.onpointermove = null;
+        marker.onpointerup = null;
+        update(ev, true);
+      };
+      marker.onpointercancel = marker.onpointerup;
+    });
+    track.appendChild(marker);
   }
+  holder.appendChild(track);
 }
 
 function wireGameLogModal() {
@@ -1738,6 +1841,9 @@ function wireGameLogModal() {
       renderGameLogChart();
     });
   });
+  els.gamelogStat.addEventListener("change", () => loadGameLogStat(els.gamelogStat.value));
+  els.gamelogLineRange.addEventListener("input", () => setGameLogPreviewLine(els.gamelogLineRange.value, false));
+  els.gamelogLineRange.addEventListener("change", () => setGameLogPreviewLine(els.gamelogLineRange.value, true));
 }
 
 /* ---------- Team insights modal (Batting Order & Pitch Arsenal) ---------- */
@@ -1878,19 +1984,20 @@ function renderOrderView(data) {
   });
 
   const fieldFor = { season: "season", handL: "handSplitL", handR: "handSplitR", pitcher: "vsPitcher" }[teamState.orderFilter];
+  els.orderVolumeHead.textContent = teamState.orderFilter === "pitcher" ? "H / AB" : "AB";
   els.orderTbody.innerHTML = "";
   data.battingOrder.forEach((row) => {
     const stat = row[fieldFor];
     const tr = document.createElement("tr");
     if (!stat) {
       tr.innerHTML = `
-        <td class="tt-player"><span class="tt-order">${row.order}</span> ${escapeHtml(row.name)} <span class="tt-pos">${escapeHtml(row.position)}</span></td>
+        <td class="tt-player">${teamPlayerCell(row)}</td>
         <td colspan="6" class="tt-nodata">${teamState.orderFilter === "pitcher" ? "No history vs this pitcher" : "No data"}</td>
       `;
     } else {
       tr.innerHTML = `
-        <td class="tt-player"><span class="tt-order">${row.order}</span> ${escapeHtml(row.name)} <span class="tt-pos">${escapeHtml(row.position)}</span></td>
-        <td>${stat.ab ?? "—"}</td>
+        <td class="tt-player">${teamPlayerCell(row)}</td>
+        <td>${teamState.orderFilter === "pitcher" ? `${stat.hits ?? 0}/${stat.ab ?? 0}` : (stat.ab ?? "—")}</td>
         <td class="${tierClassFor("avg", stat.avg)}">${stat.avg ?? "—"}</td>
         <td>${stat.hr ?? "—"}</td>
         <td>${stat.rbi ?? "—"}</td>
@@ -1900,6 +2007,11 @@ function renderOrderView(data) {
     }
     els.orderTbody.appendChild(tr);
   });
+}
+
+function teamPlayerCell(row) {
+  const photo = `https://img.mlbstatic.com/mlb-photos/image/upload/w_100,q_auto:best/v1/people/${row.id}/headshot/silo/current`;
+  return `<div class="tt-player-card"><span class="tt-order">${row.order}</span><img src="${photo}" alt="" loading="lazy" onerror="this.style.visibility='hidden'"><span class="tt-player-copy"><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(row.position || "MLB")}</small></span></div>`;
 }
 
 function renderArsenalView(data) {
@@ -1959,12 +2071,12 @@ function renderArsenalView(data) {
     const tr = document.createElement("tr");
     if (!stat) {
       tr.innerHTML = `
-        <td class="tt-player"><span class="tt-order">${row.order}</span> ${escapeHtml(row.name)} <span class="tt-pos">${escapeHtml(row.position)}</span></td>
+        <td class="tt-player">${teamPlayerCell(row)}</td>
         <td colspan="4" class="tt-nodata">No data vs this pitch</td>
       `;
     } else {
       tr.innerHTML = `
-        <td class="tt-player"><span class="tt-order">${row.order}</span> ${escapeHtml(row.name)} <span class="tt-pos">${escapeHtml(row.position)}</span></td>
+        <td class="tt-player">${teamPlayerCell(row)}</td>
         <td>${stat.pa ?? "—"}</td>
         <td>${stat.pitches ?? "—"}</td>
         <td class="${tierClassFor("k_pct", stat.k_pct)}">${stat.k_pct != null ? stat.k_pct + "%" : "—"}</td>

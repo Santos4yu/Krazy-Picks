@@ -318,6 +318,7 @@ function cacheEls() {
   els.orderVolumeHead = document.getElementById("order-volume-head");
   els.orderEmpty = document.getElementById("order-empty");
   els.arsenalFilterRow = document.getElementById("arsenal-filter-row");
+  els.arsenalSummary = document.getElementById("arsenal-summary");
   els.arsenalTbody = document.getElementById("arsenal-tbody");
   els.arsenalEmpty = document.getElementById("arsenal-empty");
 }
@@ -2021,7 +2022,7 @@ function renderArsenalView(data) {
   const allBtn = document.createElement("button");
   allBtn.type = "button";
   allBtn.className = "team-filter" + (teamState.pitchFilter === "ALL" ? " active" : "");
-  allBtn.textContent = "All";
+  allBtn.innerHTML = `All <span class="pitch-usage">100%</span>`;
   allBtn.title = "Combined across every pitch tonight's starter throws";
   allBtn.addEventListener("click", () => {
     teamState.pitchFilter = "ALL";
@@ -2032,14 +2033,28 @@ function renderArsenalView(data) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "team-filter" + (p.code === teamState.pitchFilter ? " active" : "");
-    btn.textContent = p.code;
-    btn.title = p.name;
+    const usage = Number.isFinite(Number(p.usage)) ? `${Math.round(Number(p.usage))}%` : "—";
+    btn.innerHTML = `${escapeHtml(p.code)} <span class="pitch-usage">${usage}</span>`;
+    btn.title = `${p.name}${usage !== "—" ? ` · ${usage} usage` : ""}`;
     btn.addEventListener("click", () => {
       teamState.pitchFilter = p.code;
       renderArsenalView(data);
     });
     els.arsenalFilterRow.appendChild(btn);
   });
+
+  const selectedPitch = teamState.pitchFilter === "ALL"
+    ? null
+    : pitchTypes.find((p) => p.code === teamState.pitchFilter);
+  if (els.arsenalSummary) {
+    if (selectedPitch) {
+      const usage = Number.isFinite(Number(selectedPitch.usage)) ? `${Number(selectedPitch.usage).toFixed(1)}% usage` : "Usage unavailable";
+      const speed = Number.isFinite(Number(selectedPitch.speed)) ? ` · ${Number(selectedPitch.speed).toFixed(1)} mph` : "";
+      els.arsenalSummary.innerHTML = `<strong>${escapeHtml(selectedPitch.name || selectedPitch.code)}</strong><span>${usage}${speed}</span>`;
+    } else {
+      els.arsenalSummary.innerHTML = `<strong>Full pitch mix</strong><span>Usage-weighted results across every pitch shown above</span>`;
+    }
+  }
 
   // "All" = PA-weighted aggregate across every pitch type tonight's starter
   // actually throws (not every pitch this batter has ever seen from anyone)
@@ -2049,10 +2064,9 @@ function renderArsenalView(data) {
     const rows = pitchTypes.map((p) => byPitch[p.code]).filter(Boolean);
     if (!rows.length) return null;
     const pa = rows.reduce((s, r) => s + (r.pa || 0), 0);
-    const pitches = rows.reduce((s, r) => s + (r.pitches || 0), 0);
     if (!pa) return null;
     const wAvg = (key) => rows.reduce((s, r) => s + (parseFloat(r[key]) || 0) * (r.pa || 0), 0) / pa;
-    return { pa, pitches, k_pct: Math.round(wAvg("k_pct") * 10) / 10, woba: wAvg("woba").toFixed(3) };
+    return { pa, avg: wAvg("avg").toFixed(3), k_pct: Math.round(wAvg("k_pct") * 10) / 10 };
   }
 
   els.arsenalTbody.innerHTML = "";
@@ -2062,15 +2076,14 @@ function renderArsenalView(data) {
     if (!stat) {
       tr.innerHTML = `
         <td class="tt-player">${teamPlayerCell(row)}</td>
-        <td colspan="4" class="tt-nodata">No data vs this pitch</td>
+        <td colspan="3" class="tt-nodata">No data vs this pitch</td>
       `;
     } else {
       tr.innerHTML = `
         <td class="tt-player">${teamPlayerCell(row)}</td>
         <td>${stat.pa ?? "—"}</td>
-        <td>${stat.pitches ?? "—"}</td>
+        <td class="${tierClassFor("avg", stat.avg)}">${stat.avg ?? "—"}</td>
         <td class="${tierClassFor("k_pct", stat.k_pct)}">${stat.k_pct != null ? stat.k_pct + "%" : "—"}</td>
-        <td class="${tierClassFor("woba", stat.woba)}">${stat.woba ?? "—"}</td>
       `;
     }
     els.arsenalTbody.appendChild(tr);

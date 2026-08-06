@@ -1808,7 +1808,12 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
         "opponentPitcherHand": opp_pitcher_hand,
         "opponentPitcherName": opp_pitcher_name,
         "pitchTypes": [
-            {"code": p.get("pitch_type", ""), "name": p.get("pitch_name", "")}
+            {
+                "code": p.get("pitch_type", ""),
+                "name": p.get("pitch_name", ""),
+                "usage": p.get("pct"),
+                "speed": p.get("avg_speed"),
+            }
             for p in pitcher_arsenal if p.get("pitch_type")
         ],
         "pitchRows": pitch_rows,

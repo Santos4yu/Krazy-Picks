@@ -4454,12 +4454,6 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
     background:#111a29 !important;
   }
 
-  /* PC is supporting volume data; PA, K% and wOBA are the useful mobile read. */
-  #arsenal-table th:nth-child(3),
-  #arsenal-table td:nth-child(3) {
-    display:none;
-  }
-
   #arsenal-table th:not(.tt-player),
   #arsenal-table td:not(.tt-player) {
     width:15% !important;
@@ -4472,4 +4466,34 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
     width:auto !important;
     min-width:0 !important;
   }
+}
+
+.pitch-selection-summary {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin:-5px 0 12px;
+  padding:10px 12px;
+  border:1px solid rgba(68,137,238,.2);
+  border-radius:10px;
+  background:rgba(13,23,39,.72);
+}
+.pitch-selection-summary strong { color:#f4f6fa; font-size:11px; }
+.pitch-selection-summary span { color:#8290a7; font:700 9px var(--font-mono); text-align:right; }
+.team-filter .pitch-usage { margin-left:4px; color:var(--accent); font-size:8px; }
+
+@media (max-width:700px) {
+  #arsenal-filter-row {
+    display:grid !important;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    overflow:visible !important;
+  }
+  #arsenal-filter-row .team-filter {
+    min-width:0;
+    padding:8px 3px !important;
+    text-align:center;
+  }
+  .pitch-selection-summary { align-items:flex-start; margin-top:0; }
+  .pitch-selection-summary span { max-width:62%; line-height:1.35; }
 }

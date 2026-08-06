@@ -1715,13 +1715,15 @@ def get_team_insights(team_id: int, pitcher_id, pitcher_name: str = "", pitcher_
     when the user actually opens this view.
     """
     pitcher_arsenal = []
+    arm_slot = {}
     if pitcher_id:
         pitcher_arsenal = _safe(stats_mlb.get_pitcher_arsenal, pitcher_id, default=[]) or []
-    return _build_team_insights(team_id, pitcher_id, pitcher_name, pitcher_hand, pitcher_arsenal)
+        arm_slot = _safe(stats_mlb.get_pitcher_arm_slot, pitcher_id, default={}) or {}
+    return _build_team_insights(team_id, pitcher_id, pitcher_name, pitcher_hand, pitcher_arsenal, arm_slot)
 
 
 def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str,
-                          opp_pitcher_hand: str, pitcher_arsenal: list) -> dict:
+                          opp_pitcher_hand: str, pitcher_arsenal: list, arm_slot: dict | None = None) -> dict:
     """
     Whole-lineup view of the opposing team: batting order + season/hand/BvP
     stat lines, and every batter's real season performance vs each of
@@ -1743,6 +1745,15 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
         ]
     if not lineup:
         return {}
+
+    arm_slot = arm_slot or {}
+    arm_results = {}
+    if arm_slot.get("angle") is not None:
+        arm_results = _safe(
+            stats_mlb.get_batters_vs_arm_slot,
+            [b.get("id") for b in lineup], arm_slot["angle"], opp_pitcher_hand,
+            default={},
+        ) or {}
 
     with ThreadPoolExecutor(max_workers=min(27, len(lineup) * 3)) as pool:
         futures = {}
@@ -1820,6 +1831,14 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
             for p in pitcher_arsenal if p.get("pitch_type")
         ],
         "pitchRows": pitch_rows,
+        "armSlot": arm_slot or None,
+        "armRows": [
+            {
+                "order": b["order"], "id": b["id"], "name": b["name"],
+                "position": b["position"], "stats": arm_results.get(str(b["id"])),
+            }
+            for b in lineup
+        ],
         "source": {
             "pitchMix": "MLB Stats API pitchArsenal",
             "batterPitchResults": "Baseball Savant Pitch Arsenal Stats",

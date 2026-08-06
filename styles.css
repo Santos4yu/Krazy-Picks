@@ -4499,3 +4499,58 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
   .pitch-selection-summary { align-items:flex-start; margin-top:0; }
   .pitch-selection-summary span { max-width:62%; line-height:1.35; }
 }
+
+.arsenal-mode-tabs {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:4px;
+  margin:0 0 12px;
+  padding:4px;
+  border:1px solid rgba(67,127,217,.2);
+  border-radius:11px;
+  background:rgba(6,12,22,.72);
+}
+.arsenal-mode-tabs button {
+  min-height:36px;
+  border:0;
+  border-radius:8px;
+  background:transparent;
+  color:#748198;
+  font:800 10px var(--font-mono);
+  letter-spacing:.45px;
+}
+.arsenal-mode-tabs button.active {
+  background:linear-gradient(135deg,#ff981b,#ffd05b);
+  color:#15100a;
+  box-shadow:0 6px 18px rgba(255,158,28,.18);
+}
+.arm-slot-profile {
+  display:grid;
+  grid-template-columns:auto 1fr;
+  align-items:center;
+  gap:14px;
+  margin-bottom:12px;
+  padding:14px;
+  border:1px solid rgba(67,142,255,.24);
+  border-radius:12px;
+  background:linear-gradient(135deg,rgba(17,31,52,.96),rgba(9,16,29,.92));
+}
+.arm-angle-mark { display:grid; place-items:center; min-width:92px; min-height:72px; border-right:1px solid rgba(89,137,206,.2); }
+.arm-angle-mark strong { color:#59b8ff; font-size:26px; line-height:1; }
+.arm-angle-mark span { margin-top:6px; color:#96a3b7; font:700 8px var(--font-mono); text-align:center; text-transform:uppercase; }
+.arm-slot-copy { display:grid; gap:5px; }
+.arm-slot-copy > strong { color:#f4f6fa; font-size:13px; }
+.arm-slot-copy span { color:#a6b0c0; font-size:10px; }
+.arm-slot-copy small { color:#65748b; font:700 8px var(--font-mono); line-height:1.45; }
+.arm-sample { display:block; margin-top:3px; color:#66758b; font:700 7px var(--font-mono); white-space:normal; }
+.arm-sample-limited { color:#dc9b49; }
+
+@media (max-width:700px) {
+  #arm-slot-table { width:100% !important; min-width:0 !important; table-layout:fixed; }
+  #arm-slot-table .tt-player { position:static !important; width:55% !important; min-width:0 !important; box-shadow:none !important; }
+  #arm-slot-table th:not(.tt-player), #arm-slot-table td:not(.tt-player) { width:15% !important; padding-inline:2px !important; text-align:center !important; font-size:9.5px; }
+  .arm-slot-profile { grid-template-columns:78px 1fr; gap:10px; padding:11px; }
+  .arm-angle-mark { min-width:68px; min-height:78px; }
+  .arm-angle-mark strong { font-size:23px; }
+  .arm-slot-copy span { font-size:9px; }
+}

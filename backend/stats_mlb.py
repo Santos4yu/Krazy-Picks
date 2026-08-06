@@ -30,6 +30,7 @@ import sys
 import time
 import json
 import math
+import hashlib
 import logging
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -2647,6 +2648,160 @@ def get_pitcher_arsenal(pitcher_id: int) -> list[dict]:
             "avg_speed":  round(float(spd), 1) if spd else None,
         })
     result.sort(key=lambda x: x["pct"], reverse=True)
+    return result
+
+
+def get_pitcher_arm_slot(pitcher_id: int) -> dict:
+    """Official Statcast season arm angle and release-point measurements.
+
+    Arm angle is measured from 0 degrees (horizontal) to 90 degrees
+    (straight over the top). The human-readable range label is presentation
+    only; the exact Statcast angle remains the source of truth.
+    """
+    cache_file = CACHE_DIR / f"savant_arm_angles_{SEASON}.json"
+    table = None
+    if cache_file.exists():
+        try:
+            if time.time() - cache_file.stat().st_mtime < 3600:
+                table = json.loads(cache_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    if table is None:
+        import csv as _csv
+        import io as _io
+        try:
+            response = requests.get(
+                "https://baseballsavant.mlb.com/leaderboard/pitcher-arm-angles",
+                params={"season": SEASON, "gameType": "R", "groupBy": "Season", "min": 1, "csv": "true"},
+                timeout=20,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if not response.ok:
+                return {}
+            table = {row.get("pitcher", ""): row for row in _csv.DictReader(_io.StringIO(response.text))}
+            try:
+                cache_file.write_text(json.dumps(table), encoding="utf-8")
+            except OSError:
+                pass
+        except requests.RequestException:
+            return {}
+    row = (table or {}).get(str(pitcher_id))
+    if not row:
+        return {}
+    try:
+        angle = round(float(row.get("ball_angle")), 1)
+    except (TypeError, ValueError):
+        return {}
+    label = ("Submarine / low slot" if angle < 20 else
+             "Sidearm range" if angle < 40 else
+             "Three-quarter range" if angle < 60 else
+             "Overhand range")
+    def _rounded(key):
+        try:
+            return round(float(row.get(key)), 2)
+        except (TypeError, ValueError):
+            return None
+    return {
+        "angle": angle,
+        "label": label,
+        "hand": row.get("pitch_hand", ""),
+        "pitches": int(float(row.get("n_pitches", 0) or 0)),
+        "release_x": _rounded("relative_release_ball_x"),
+        "release_z": _rounded("release_ball_z"),
+        "comparison_low": round(max(0, angle - 5), 1),
+        "comparison_high": round(min(90, angle + 5), 1),
+        "season": SEASON,
+        "source": "Baseball Savant Statcast Arm Angle Leaderboard",
+    }
+
+
+def get_batters_vs_arm_slot(batter_ids: list[int], target_angle: float,
+                            pitcher_hand: str = "") -> dict[str, dict]:
+    """Season AVG and K% for batters against comparable Statcast arm angles.
+
+    Comparable means the PA-ending pitch was released within +/-5 degrees of
+    tonight's pitcher's official season arm angle and by the same throwing
+    hand. Results come directly from Baseball Savant pitch-level events.
+    """
+    ids = sorted({int(pid) for pid in batter_ids if pid})
+    if not ids or target_angle is None:
+        return {}
+    low, high = max(0, target_angle - 5), min(90, target_angle + 5)
+    cache_tag = hashlib.sha1(",".join(map(str, ids)).encode("ascii")).hexdigest()[:12]
+    cache_file = CACHE_DIR / f"arm_slot_batters_{SEASON}_{pitcher_hand}_{round(target_angle)}_{cache_tag}.json"
+    if cache_file.exists():
+        try:
+            if time.time() - cache_file.stat().st_mtime < 3600:
+                return json.loads(cache_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    params = [
+        ("all", "true"), ("type", "details"), ("player_type", "batter"),
+        ("hfSeaYear", f"{SEASON}|"), ("hfGT", "R|"),
+    ] + [("batters_lookup[]", str(pid)) for pid in ids]
+    try:
+        response = requests.get(
+            "https://baseballsavant.mlb.com/statcast_search/csv",
+            params=params,
+            timeout=45,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if not response.ok:
+            return {}
+    except requests.RequestException:
+        return {}
+
+    import csv as _csv
+    import io as _io
+    pa_events = {
+        "single", "double", "triple", "home_run", "field_out", "force_out",
+        "grounded_into_double_play", "field_error", "strikeout",
+        "strikeout_double_play", "walk", "intent_walk", "intentional_walk",
+        "hit_by_pitch", "sac_fly", "sac_bunt", "catcher_interf", "double_play",
+        "triple_play", "fielders_choice", "fielders_choice_out",
+    }
+    no_ab_events = {"walk", "intent_walk", "intentional_walk", "hit_by_pitch", "sac_fly", "sac_bunt", "catcher_interf"}
+    hit_events = {"single", "double", "triple", "home_run"}
+    strikeout_events = {"strikeout", "strikeout_double_play"}
+    totals = {str(pid): {"pa": 0, "ab": 0, "hits": 0, "strikeouts": 0} for pid in ids}
+    for row in _csv.DictReader(_io.StringIO(response.text)):
+        bid = str(row.get("batter", "")).strip()
+        if bid not in totals or (pitcher_hand and row.get("p_throws") != pitcher_hand):
+            continue
+        try:
+            angle = float(row.get("arm_angle"))
+        except (TypeError, ValueError):
+            continue
+        event = str(row.get("events", "")).strip()
+        if not (low <= angle <= high) or event not in pa_events:
+            continue
+        stat = totals[bid]
+        stat["pa"] += 1
+        if event not in no_ab_events:
+            stat["ab"] += 1
+        if event in hit_events:
+            stat["hits"] += 1
+        if event in strikeout_events:
+            stat["strikeouts"] += 1
+
+    result = {}
+    for bid, stat in totals.items():
+        pa, ab = stat["pa"], stat["ab"]
+        if not pa:
+            continue
+        result[bid] = {
+            **stat,
+            "avg": round(stat["hits"] / ab, 3) if ab else None,
+            "k_pct": round(stat["strikeouts"] / pa * 100, 1),
+            "sample": "Reliable sample" if pa >= 30 else "Moderate sample" if pa >= 15 else "Limited sample",
+            "angle_low": round(low, 1), "angle_high": round(high, 1),
+            "season": SEASON,
+        }
+    try:
+        cache_file.write_text(json.dumps(result), encoding="utf-8")
+    except OSError:
+        pass
     return result
 
 

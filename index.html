@@ -242,22 +242,31 @@
     </div>
 
     <div class="team-view" id="team-view-arsenal" hidden>
-      <div class="team-filter-row" id="arsenal-filter-row"></div>
-      <div class="pitch-selection-summary" id="arsenal-summary"></div>
-      <div class="team-table-wrap">
-        <table class="team-table" id="arsenal-table">
-          <thead>
-            <tr>
-              <th class="tt-player">Player</th>
-              <th>PA</th>
-              <th>AVG</th>
-              <th>K%</th>
-            </tr>
-          </thead>
-          <tbody id="arsenal-tbody"></tbody>
-        </table>
+      <div class="arsenal-mode-tabs" role="tablist" aria-label="Pitch matchup view">
+        <button type="button" class="active" id="arsenal-mode-pitches" role="tab" aria-selected="true">Pitch Types</button>
+        <button type="button" id="arsenal-mode-arm" role="tab" aria-selected="false">Arm Slot</button>
       </div>
-      <p class="team-empty" id="arsenal-empty" hidden></p>
+      <div id="arsenal-pitches-panel">
+        <div class="team-filter-row" id="arsenal-filter-row"></div>
+        <div class="pitch-selection-summary" id="arsenal-summary"></div>
+        <div class="team-table-wrap">
+          <table class="team-table" id="arsenal-table">
+            <thead><tr><th class="tt-player">Player</th><th>PA</th><th>AVG</th><th>K%</th></tr></thead>
+            <tbody id="arsenal-tbody"></tbody>
+          </table>
+        </div>
+        <p class="team-empty" id="arsenal-empty" hidden></p>
+      </div>
+      <div id="arsenal-arm-panel" hidden>
+        <div class="arm-slot-profile" id="arm-slot-profile"></div>
+        <div class="team-table-wrap">
+          <table class="team-table" id="arm-slot-table">
+            <thead><tr><th class="tt-player">Player</th><th>PA</th><th>AVG</th><th>K%</th></tr></thead>
+            <tbody id="arm-slot-tbody"></tbody>
+          </table>
+        </div>
+        <p class="team-empty" id="arm-slot-empty" hidden></p>
+      </div>
     </div>
   </div>
 </div>

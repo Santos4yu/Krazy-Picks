@@ -321,6 +321,13 @@ function cacheEls() {
   els.arsenalSummary = document.getElementById("arsenal-summary");
   els.arsenalTbody = document.getElementById("arsenal-tbody");
   els.arsenalEmpty = document.getElementById("arsenal-empty");
+  els.arsenalModePitches = document.getElementById("arsenal-mode-pitches");
+  els.arsenalModeArm = document.getElementById("arsenal-mode-arm");
+  els.arsenalPitchesPanel = document.getElementById("arsenal-pitches-panel");
+  els.arsenalArmPanel = document.getElementById("arsenal-arm-panel");
+  els.armSlotProfile = document.getElementById("arm-slot-profile");
+  els.armSlotTbody = document.getElementById("arm-slot-tbody");
+  els.armSlotEmpty = document.getElementById("arm-slot-empty");
 }
 
 /* ---------- Theme (mode + accent) ---------- */
@@ -1847,6 +1854,7 @@ const teamState = {
   view: "order",      // "order" | "arsenal"
   orderFilter: "season", // "season" | "handL" | "handR" | "pitcher"
   pitchFilter: "",    // selected pitch_type code, "" = first available
+  arsenalMode: "pitches", // "pitches" | "arm"
 };
 
 // Fixed thresholds (not "vs this player's own baseline") -- green/red mean
@@ -1916,12 +1924,29 @@ function wireTeamModal() {
       renderTeamModal();
     });
   });
+  [els.arsenalModePitches, els.arsenalModeArm].forEach((btn) => {
+    btn.addEventListener("click", () => {
+      teamState.arsenalMode = btn === els.arsenalModeArm ? "arm" : "pitches";
+      renderArsenalMode();
+    });
+  });
+}
+
+function renderArsenalMode() {
+  const arm = teamState.arsenalMode === "arm";
+  els.arsenalModePitches.classList.toggle("active", !arm);
+  els.arsenalModeArm.classList.toggle("active", arm);
+  els.arsenalModePitches.setAttribute("aria-selected", String(!arm));
+  els.arsenalModeArm.setAttribute("aria-selected", String(arm));
+  els.arsenalPitchesPanel.hidden = arm;
+  els.arsenalArmPanel.hidden = !arm;
 }
 
 function renderTeamModal() {
   els.teamTabs.querySelectorAll(".team-tab").forEach((b) => b.classList.toggle("active", b.dataset.view === teamState.view));
   els.teamViewOrder.hidden = teamState.view !== "order";
   els.teamViewArsenal.hidden = teamState.view !== "arsenal";
+  renderArsenalMode();
 
   const data = teamState.data;
   if (!data) {
@@ -1932,6 +1957,9 @@ function renderTeamModal() {
     els.arsenalEmpty.hidden = false;
     els.arsenalEmpty.textContent = "Loading roster…";
     els.arsenalTbody.innerHTML = "";
+    els.armSlotEmpty.hidden = false;
+    els.armSlotEmpty.textContent = "Loading official Statcast arm-slot data…";
+    els.armSlotTbody.innerHTML = "";
     return;
   }
   if (data.error || !data.battingOrder || !data.battingOrder.length) {
@@ -1943,6 +1971,9 @@ function renderTeamModal() {
     els.arsenalEmpty.hidden = false;
     els.arsenalEmpty.textContent = msg;
     els.arsenalTbody.innerHTML = "";
+    els.armSlotEmpty.hidden = false;
+    els.armSlotEmpty.textContent = msg;
+    els.armSlotTbody.innerHTML = "";
     return;
   }
 
@@ -1950,6 +1981,7 @@ function renderTeamModal() {
 
   renderOrderView(data);
   renderArsenalView(data);
+  renderArmSlotView(data);
 }
 
 function renderOrderView(data) {
@@ -2068,6 +2100,41 @@ function renderArsenalView(data) {
       `;
     }
     els.arsenalTbody.appendChild(tr);
+  });
+}
+
+function renderArmSlotView(data) {
+  const slot = data.armSlot;
+  els.armSlotTbody.innerHTML = "";
+  if (!slot || slot.angle == null) {
+    els.armSlotProfile.innerHTML = "";
+    els.armSlotEmpty.hidden = false;
+    els.armSlotEmpty.textContent = "Official Statcast arm-angle data is not available for this pitcher yet.";
+    return;
+  }
+
+  els.armSlotEmpty.hidden = true;
+  const releaseHeight = slot.release_z != null ? `${Number(slot.release_z).toFixed(2)} ft release height` : "Release height unavailable";
+  els.armSlotProfile.innerHTML = `
+    <div class="arm-angle-mark"><strong>${Number(slot.angle).toFixed(1)}°</strong><span>${escapeHtml(slot.label || "Arm slot")}</span></div>
+    <div class="arm-slot-copy"><strong>${escapeHtml(data.opponentPitcherName || "Tonight's pitcher")}</strong><span>${escapeHtml(String(slot.season))} Statcast · ${releaseHeight} · ${slot.pitches || "—"} tracked pitches</span><small>Batter results below use PA-ending pitches from the same throwing hand within ${Number(slot.comparison_low).toFixed(1)}°–${Number(slot.comparison_high).toFixed(1)}°.</small></div>
+  `;
+
+  (data.armRows || []).forEach((row) => {
+    const stat = row.stats;
+    const tr = document.createElement("tr");
+    if (!stat) {
+      tr.innerHTML = `<td class="tt-player">${teamPlayerCell(row)}</td><td colspan="3" class="tt-nodata">No comparable-angle sample</td>`;
+    } else {
+      const sampleClass = stat.pa < 15 ? "arm-sample-limited" : "";
+      tr.innerHTML = `
+        <td class="tt-player">${teamPlayerCell(row)}</td>
+        <td><strong>${stat.pa}</strong><small class="arm-sample ${sampleClass}">${escapeHtml(stat.sample || "")}</small></td>
+        <td class="${tierClassFor("avg", stat.avg)}">${formatBattingAverage(stat.avg)}</td>
+        <td class="${tierClassFor("k_pct", stat.k_pct)}">${stat.k_pct != null ? Number(stat.k_pct).toFixed(1) + "%" : "—"}</td>
+      `;
+    }
+    els.armSlotTbody.appendChild(tr);
   });
 }
 

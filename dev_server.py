@@ -116,6 +116,10 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     import os
-    os.chdir(Path(__file__).parent)
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8793
+    project_root = Path(__file__).parent
+    # Render runs the Vite production build from dist/. Local development
+    # continues to serve the source tree unless RENDER is present.
+    static_root = project_root / "dist" if os.getenv("RENDER") and (project_root / "dist").is_dir() else project_root
+    os.chdir(static_root)
+    port = int(os.getenv("PORT") or (sys.argv[1] if len(sys.argv) > 1 else 8793))
     ThreadingHTTPServer(("", port), Handler).serve_forever()

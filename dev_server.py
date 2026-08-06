@@ -57,6 +57,21 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 class Handler(SimpleHTTPRequestHandler):
+    def end_headers(self):
+        # Production hardening. These headers do not pretend browser code can
+        # be hidden, but they prevent framing, MIME sniffing, referrer leaks,
+        # unnecessary browser capabilities, and accidental source caching.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Resource-Policy", "same-site")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://img.mlbstatic.com https://cdn.nba.com; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+        if urlparse(self.path).path == "/index.html" or urlparse(self.path).path == "/":
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        super().end_headers()
+
     def do_GET(self):
         try:
             route_cls = ROUTES.get(urlparse(self.path).path)

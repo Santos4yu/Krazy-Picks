@@ -1714,16 +1714,34 @@ def get_team_insights(team_id: int, pitcher_id, pitcher_name: str = "", pitcher_
     would undo the latency work already done on the main card. Only runs
     when the user actually opens this view.
     """
-    pitcher_arsenal = []
-    arm_slot = {}
-    if pitcher_id:
-        pitcher_arsenal = _safe(stats_mlb.get_pitcher_arsenal, pitcher_id, default=[]) or []
-        arm_slot = _safe(stats_mlb.get_pitcher_arm_slot, pitcher_id, default={}) or {}
-    return _build_team_insights(team_id, pitcher_id, pitcher_name, pitcher_hand, pitcher_arsenal, arm_slot)
+    # These sources are independent. Loading them together removes several
+    # seconds from a cold modal open without changing any source or result.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        lineup_future = pool.submit(_safe, stats_mlb.get_team_lineup, team_id, default=[])
+        roster_future = pool.submit(_safe, stats_mlb.get_team_hitters_roster, team_id, default=[])
+        arsenal_future = (
+            pool.submit(_safe, stats_mlb.get_pitcher_arsenal, pitcher_id, default=[])
+            if pitcher_id else None
+        )
+        arm_future = (
+            pool.submit(_safe, stats_mlb.get_pitcher_arm_slot, pitcher_id, default={})
+            if pitcher_id else None
+        )
+        lineup = lineup_future.result() or []
+        roster = roster_future.result() or []
+        pitcher_arsenal = arsenal_future.result() if arsenal_future else []
+        arm_slot = arm_future.result() if arm_future else {}
+
+    return _build_team_insights(
+        team_id, pitcher_id, pitcher_name, pitcher_hand,
+        pitcher_arsenal or [], arm_slot or {}, lineup=lineup, roster=roster,
+    )
 
 
 def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str,
-                          opp_pitcher_hand: str, pitcher_arsenal: list, arm_slot: dict | None = None) -> dict:
+                          opp_pitcher_hand: str, pitcher_arsenal: list,
+                          arm_slot: dict | None = None, lineup: list | None = None,
+                          roster: list | None = None) -> dict:
     """
     Whole-lineup view of the opposing team: batting order + season/hand/BvP
     stat lines, and every batter's real season performance vs each of
@@ -1736,26 +1754,39 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
     still browsable early. lineupConfirmed in the response tells the
     frontend which case it's in.
     """
-    lineup = stats_mlb.get_team_lineup(opp_team_id)
+    lineup = lineup if lineup is not None else stats_mlb.get_team_lineup(opp_team_id)
     lineup_confirmed = bool(lineup)
     if not lineup:
+        roster = roster if roster is not None else stats_mlb.get_team_hitters_roster(opp_team_id)
         lineup = [
             {"order": i + 1, "id": p["id"], "name": p["name"], "position": p["position"]}
-            for i, p in enumerate(stats_mlb.get_team_hitters_roster(opp_team_id))
+            for i, p in enumerate(roster)
         ]
     if not lineup:
         return {}
 
     arm_slot = arm_slot or {}
-    arm_results = {}
-    if arm_slot.get("angle") is not None:
-        arm_results = _safe(
-            stats_mlb.get_batters_vs_arm_slot,
-            [b.get("id") for b in lineup], arm_slot["angle"], opp_pitcher_hand,
-            default={},
-        ) or {}
+    batter_ids = [b.get("id") for b in lineup if b.get("id")]
 
-    with ThreadPoolExecutor(max_workers=min(27, len(lineup) * 3)) as pool:
+    def _load_arsenal_rows():
+        # The Savant arsenal source is one league-wide file. The first call
+        # downloads it; every subsequent batter is an inexpensive lookup.
+        # Keeping this in one worker prevents a cold cache from downloading
+        # that same file once for every roster member.
+        return {
+            bid: (_safe(stats_mlb.get_batter_arsenal_stats, bid, default=[]) or [])
+            for bid in batter_ids
+        }
+
+    with ThreadPoolExecutor(max_workers=min(29, len(lineup) * 3 + 2)) as pool:
+        arsenal_rows_future = pool.submit(_load_arsenal_rows)
+        arm_results_future = (
+            pool.submit(
+                _safe, stats_mlb.get_batters_vs_arm_slot,
+                batter_ids, arm_slot["angle"], opp_pitcher_hand, default={},
+            )
+            if arm_slot.get("angle") is not None else None
+        )
         futures = {}
         for b in lineup:
             bid = b["id"]
@@ -1763,9 +1794,10 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
                 "season": pool.submit(_safe, stats_mlb.get_batter_season_line, bid, default={}),
                 "hand": pool.submit(_safe, stats_mlb.get_batter_hand_splits, bid, default={}),
                 "bvp": pool.submit(_safe, stats_mlb.get_bvp_history, bid, opp_pitcher_id, default={}) if opp_pitcher_id else None,
-                "arsenal": pool.submit(_safe, stats_mlb.get_batter_arsenal_stats, bid, default=[]),
             }
 
+        arsenal_rows = arsenal_rows_future.result()
+        arm_results = arm_results_future.result() if arm_results_future else {}
         order_rows = []
         pitch_rows = []
         for b in lineup:
@@ -1774,7 +1806,7 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
             season = f["season"].result()
             hand_splits = f["hand"].result()
             bvp = f["bvp"].result() if f["bvp"] else {}
-            bat_arsenal = f["arsenal"].result() or []
+            bat_arsenal = arsenal_rows.get(bid, [])
 
             hand_line = (hand_splits or {}).get(opp_pitcher_hand or "R") or {}
             hand_line_l = (hand_splits or {}).get("L") or {}

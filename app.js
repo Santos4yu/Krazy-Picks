@@ -1856,6 +1856,29 @@ const teamState = {
   pitchFilter: "",    // selected pitch_type code, "" = first available
   arsenalMode: "pitches", // "pitches" | "arm"
 };
+const teamInsightsRequests = new Map();
+
+function teamInsightsKey(params) {
+  return `${params.teamId}-${params.pitcherId || ""}-${params.pitcherHand || "R"}`;
+}
+
+function requestTeamInsights(params) {
+  const key = teamInsightsKey(params);
+  if (teamInsightsRequests.has(key)) return teamInsightsRequests.get(key);
+  const url = `${TEAM_INSIGHTS_SOURCE}?teamId=${params.teamId}&pitcherId=${params.pitcherId || ""}`
+    + `&pitcherName=${encodeURIComponent(params.pitcherName || "")}&pitcherHand=${params.pitcherHand || "R"}`;
+  const request = fetch(url)
+    .then(async (res) => {
+      const data = await res.json();
+      return data.error ? { error: data.error } : data;
+    })
+    .catch((err) => {
+      teamInsightsRequests.delete(key);
+      return { error: err.message };
+    });
+  teamInsightsRequests.set(key, request);
+  return request;
+}
 
 // Fixed thresholds (not "vs this player's own baseline") -- green/red mean
 // "statistically strong/weak performance," matching how the reference
@@ -1874,7 +1897,7 @@ function openTeamModal(params, opponentName) {
   els.teamOverlay.hidden = false;
   els.teamTitle.textContent = opponentName ? `${opponentName} — Team Insights` : "Team Insights";
 
-  const key = `${params.teamId}-${params.pitcherId}`;
+  const key = teamInsightsKey(params);
   if (teamState.cacheKey === key && teamState.data) {
     renderTeamModal();
     return;
@@ -1890,16 +1913,9 @@ function closeTeamModal() {
 }
 
 async function fetchTeamInsights(params) {
-  const url = `${TEAM_INSIGHTS_SOURCE}?teamId=${params.teamId}&pitcherId=${params.pitcherId || ""}`
-    + `&pitcherName=${encodeURIComponent(params.pitcherName || "")}&pitcherHand=${params.pitcherHand || "R"}`;
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-    if (`${params.teamId}-${params.pitcherId}` !== teamState.cacheKey) return; // stale response, modal moved on
-    teamState.data = data.error ? { error: data.error } : data;
-  } catch (err) {
-    teamState.data = { error: err.message };
-  }
+  const data = await requestTeamInsights(params);
+  if (teamInsightsKey(params) !== teamState.cacheKey) return; // stale response, modal moved on
+  teamState.data = data;
   renderTeamModal();
 }
 
@@ -2540,6 +2556,17 @@ function fillMatchup(node, p) {
     // team for a batter prop. Don't assume it's m.opponent either way.
     teamBtn.textContent = "👀 View Batting Order & Pitch Arsenal →";
     teamBtn.onclick = () => openTeamModal(p.teamInsightsParams, p.teamInsightsTeamName || "");
+    // Start the accurate roster/Statcast request after the main card is
+    // visible. By the time a user reaches this button, much or all of the
+    // modal data is usually ready. The promise is reused on click.
+    const warmInsights = () => requestTeamInsights(p.teamInsightsParams);
+    teamBtn.addEventListener("pointerenter", warmInsights, { once: true });
+    teamBtn.addEventListener("focus", warmInsights, { once: true });
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(warmInsights, { timeout: 1200 });
+    } else {
+      setTimeout(warmInsights, 500);
+    }
   } else {
     teamBtn.hidden = true;
   }

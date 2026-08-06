@@ -3952,16 +3952,18 @@ body::before,body::after{display:none}.grid-bg,.vortex-swirl,.glow-orb{display:n
 .moneyline-coming-soon h2 { margin:10px 0 5px; font-size:clamp(42px,7vw,72px); letter-spacing:-3px; }
 .moneyline-coming-soon>strong { color:var(--accent); font:800 13px var(--font-mono); letter-spacing:2.5px; text-transform:uppercase; }
 .moneyline-coming-soon>p:last-child { max-width:560px; margin:20px 0 0; color:var(--text-dim); font-size:14px; line-height:1.75; }
-.coming-soon-orbit { position:relative; width:66px; height:66px; margin-bottom:10px; border:1px solid rgba(78,155,255,.3); border-radius:50%; box-shadow:inset 0 0 24px rgba(39,126,255,.11),0 0 36px rgba(39,126,255,.08); }
-.coming-soon-orbit::before,.coming-soon-orbit::after { content:""; position:absolute; inset:12px; border:1px solid rgba(255,164,34,.28); border-radius:50%; }
-.coming-soon-orbit::after { inset:25px; border:0; background:linear-gradient(135deg,#ff9d1c,#4da8ff); box-shadow:0 0 18px rgba(68,151,255,.32); }
-.coming-soon-orbit i { position:absolute; z-index:2; top:3px; left:29px; width:7px; height:7px; border-radius:50%; background:#61b3ff; box-shadow:0 0 12px #4da8ff; animation:moneyline-orbit 5s linear infinite; transform-origin:4px 30px; }
-@keyframes moneyline-orbit { to { transform:rotate(360deg); } }
+.coming-soon-logo {
+  display:block;
+  width:clamp(104px,12vw,148px);
+  height:clamp(104px,12vw,148px);
+  margin:0 auto 14px;
+  object-fit:contain;
+  filter:drop-shadow(-14px 10px 28px rgba(255,155,20,.17)) drop-shadow(14px 10px 30px rgba(43,137,255,.19));
+}
 @media (max-width:640px) {
   .moneyline-coming-soon { min-height:360px; margin-top:12px; padding:52px 22px; border-radius:18px; }
   .moneyline-coming-soon h2 { letter-spacing:-2px; }
 }
-@media (prefers-reduced-motion:reduce) { .coming-soon-orbit i { animation:none; } }
 .ml-game-picker { display:flex; gap:8px; overflow-x:auto; padding:0 2px 12px; scrollbar-width:thin; }
 .ml-game-choice { flex:0 0 auto; display:grid; gap:4px; min-width:148px; padding:10px 12px; border:1px solid var(--panel-border); border-radius:11px; color:var(--text-dim); background:var(--bg-elevated); text-align:left; font:700 11px var(--font-mono); cursor:pointer; transition:border-color .16s ease, background .16s ease, color .16s ease; }
 .ml-game-choice small { color:var(--text-faint); font-size:9px; text-transform:uppercase; letter-spacing:.07em; }
@@ -4080,7 +4082,7 @@ body::before, body::after, .grid-bg, .vortex-swirl, .glow-orb { display:none !im
   background:radial-gradient(circle at 50% 20%,rgba(32,119,255,.12),transparent 42%),linear-gradient(145deg,rgba(14,21,34,.98),rgba(6,10,17,.98));
   color:var(--text-dim); text-align:center; box-shadow:0 20px 50px rgba(0,0,0,.22);
 }
-.tools-coming-soon::before { content:"KP"; display:grid; place-items:center; width:68px; height:68px; margin-bottom:18px; border:1px solid rgba(255,157,22,.32); border-radius:18px; color:var(--accent); background:rgba(255,157,22,.08); font:800 20px var(--font-mono); box-shadow:0 0 34px rgba(255,157,22,.08); }
+.tools-coming-soon::before { content:none; }
 .tools-coming-soon .coming-kicker { color:var(--kp-blue-soft); font:700 9px var(--font-mono); letter-spacing:2px; }
 .tools-coming-soon strong { margin-top:7px; color:#fff; font-size:clamp(28px,4vw,44px); letter-spacing:-1.5px; }
 .tools-coming-soon p { margin:8px 0 4px; color:#b3bdcd; font-size:16px; }
@@ -4186,7 +4188,7 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
 .tool-tab:not([data-tool="attack"]).active { color:#f3f6fb !important; background:linear-gradient(145deg,#121a29,#0b101a) !important; box-shadow:inset 3px 0 var(--accent) !important; }
 .tool-tab:not([data-tool="attack"]).active span { color:var(--accent) !important; }
 .tools-coming-soon { display:grid !important; place-items:center !important; min-height:330px !important; max-width:1120px !important; margin:18px auto 0 !important; padding:50px 24px !important; border:1px solid rgba(66,139,255,.22) !important; border-radius:16px !important; background:radial-gradient(circle at 50% 20%,rgba(32,119,255,.12),transparent 42%),linear-gradient(145deg,rgba(14,21,34,.98),rgba(6,10,17,.98)) !important; color:var(--text-dim) !important; text-align:center !important; }
-.tools-coming-soon::before { content:"KP"; display:grid; place-items:center; width:68px; height:68px; margin-bottom:18px; border:1px solid rgba(255,157,22,.32); border-radius:18px; color:var(--accent); background:rgba(255,157,22,.08); font:800 20px var(--font-mono); }
+.tools-coming-soon::before { content:none; }
 .tools-coming-soon .coming-kicker { color:var(--kp-blue-soft); font:700 9px var(--font-mono); letter-spacing:2px; }
 .tools-coming-soon strong { margin-top:7px; color:#fff; font-size:clamp(28px,4vw,44px); letter-spacing:-1.5px; }
 .tools-coming-soon p { margin:8px 0 4px; color:#b3bdcd; font-size:16px; }

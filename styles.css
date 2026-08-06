@@ -4211,6 +4211,16 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
   .gl-col { flex-basis:44px !important; min-width:44px !important; }
 }
 
+/* The bottom dock replaces the old hamburger navigation. */
+.side-menu-toggle { display:none !important; }
+.settings-btn { transition:opacity .34s ease,transform .42s cubic-bezier(.22,1,.36,1),filter .34s ease !important; }
+@media (max-width:700px) {
+  .settings-btn.mobile-chrome-hidden { opacity:0 !important; transform:translateY(-16px) scale(.92) !important; filter:blur(5px); pointer-events:none !important; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .settings-btn { transition-duration:.01ms !important; }
+}
+
 /* Glass search surface with the same reactive edge treatment as cards. */
 .search-wrap { overflow:visible !important; }
 .search-box { position:relative; isolation:isolate; height:58px !important; padding:6px 7px 6px 22px !important; border:1px solid rgba(126,159,207,.22) !important; border-radius:999px !important; background:linear-gradient(115deg,rgba(14,21,33,.68),rgba(6,11,19,.48)) !important; backdrop-filter:blur(18px) saturate(135%); -webkit-backdrop-filter:blur(18px) saturate(135%); box-shadow:inset 0 1px rgba(255,255,255,.06),0 16px 42px rgba(0,0,0,.2) !important; }

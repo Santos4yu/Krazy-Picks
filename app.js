@@ -377,10 +377,8 @@ function wireChromeAutoHide() {
 
   const apply = () => {
     const y = window.scrollY;
-    // The menu is intentionally available only at the very top of a page.
-    // It stays hidden while scrolling in either direction until the user
-    // returns all the way to the top.
-    els.sideMenuToggle.classList.toggle("chrome-hidden", y > 2);
+    const isMobile = window.matchMedia("(max-width: 700px)").matches;
+    els.settingsBtn.classList.toggle("mobile-chrome-hidden", isMobile && y > 2);
     ticking = false;
   };
 
@@ -390,6 +388,7 @@ function wireChromeAutoHide() {
       ticking = true;
     }
   }, { passive: true });
+  window.addEventListener("resize", apply);
   apply();
 }
 

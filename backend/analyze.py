@@ -986,6 +986,7 @@ def get_matchup_info(player_id: int) -> dict:
                     "home_team_id": team_id,
                     "opp_team_id":  game.get("away_team_id"),
                     "game_utc":     g_utc,
+                    "game_pk":      game.get("gamePk"),
                 }
             if team_id == game.get("away_team_id"):
                 return {
@@ -996,6 +997,7 @@ def get_matchup_info(player_id: int) -> dict:
                     "home_team_id": game.get("home_team_id"),
                     "opp_team_id":  game.get("home_team_id"),
                     "game_utc":     g_utc,
+                    "game_pk":      game.get("gamePk"),
                 }
     return {}
 

@@ -363,7 +363,7 @@ def compute_tool(tool: str) -> dict:
             read = "Hitter-friendly" if park >= 1.03 else "Pitcher-friendly" if park <= .97 else "Neutral environment"
             rich_rows.append({"title": label, "badge": read, "tone": "good" if delta > 0 else "risk" if delta < 0 else "neutral", "summary": f"{game.get('home_team_name', home)} plays {abs(delta)}% {'above' if delta >= 0 else 'below'} the neutral run baseline.", "evidence": [{"label": "Park factor", "value": f"{park:.2f}x", "detail": "Season venue run environment"}, {"label": "Read", "value": read, "detail": "Park only, not a player recommendation"}], "score": park})
         elif tool == "weather":
-            weather = _safe(stats_mlb.get_game_weather, home, game.get("game_utc", ""), default={}) or {}
+            weather = _safe(stats_mlb.get_game_weather, home, game.get("game_utc", ""), game_pk, default={}) or {}
             if not weather or weather.get("error"):
                 continue
             if weather.get("dome"):
@@ -442,7 +442,7 @@ def compute_tool(tool: str) -> dict:
         if tool == "parks":
             rows.append({"title": label, "detail": f"Park factor {park:.2f}x", "signal": "Hitter-friendly" if park >= 1.04 else "Pitcher-friendly" if park <= .96 else "Neutral", "score": park})
         elif tool == "weather":
-            weather = _safe(stats_mlb.get_game_weather, game.get("home_abbr", ""), game.get("game_utc", ""), default={}) or {}
+            weather = _safe(stats_mlb.get_game_weather, game.get("home_abbr", ""), game.get("game_utc", ""), game_pk, default={}) or {}
             if weather:
                 wind = weather.get("speed_mph") or 0
                 effect = weather.get("effect") or "weather unavailable"
@@ -504,7 +504,7 @@ def compute_prediction(player_name: str, prop_type: str, stat_label: str, line: 
         f_hand_splits = pool.submit(_safe, stats_mlb.get_batter_hand_splits, player_id, default={})
         f_statcast = pool.submit(_safe, stats_mlb.get_statcast_by_id, player_id, default={})
         f_vs_team = pool.submit(_safe, stats_mlb.get_vs_team_splits, player_id, opp_team_id, line, prop_type, default={}) if opp_team_id else None
-        f_weather = pool.submit(_safe, stats_mlb.get_game_weather, home_abbr, matchup.get("game_utc", ""), default={}) if home_abbr else None
+        f_weather = pool.submit(_safe, stats_mlb.get_game_weather, home_abbr, matchup.get("game_utc", ""), matchup.get("game_pk"), default={}) if home_abbr else None
         f_team_bvp = pool.submit(_safe, stats_mlb.get_team_bvp, player_id, opp_team_id, default={}) if opp_team_id else None
         f_oaa = pool.submit(_safe, stats_mlb.get_team_defense_oaa, opp_team_id, default={}) if opp_team_id else None
         f_k_rates = pool.submit(_safe, stats_mlb.get_all_teams_k_rate, default={})
@@ -667,7 +667,7 @@ def compute_k_prop(player_id, canonical_name, team_abbr, matchup, line, side, st
     with ThreadPoolExecutor(max_workers=4) as pool:
         f_k_card = pool.submit(stats_mlb.get_pitcher_k_card, canonical_name, line, opp_team_id,
                                 pitcher_id=player_id, prop_type=backend_prop_type, is_home=is_home)
-        f_weather = pool.submit(_safe, stats_mlb.get_game_weather, home_abbr, matchup.get("game_utc", ""), default={}) if home_abbr else None
+        f_weather = pool.submit(_safe, stats_mlb.get_game_weather, home_abbr, matchup.get("game_utc", ""), matchup.get("game_pk"), default={}) if home_abbr else None
         f_arsenal = pool.submit(_safe, stats_mlb.get_pitcher_arsenal, player_id, default=[])
         f_umpire = pool.submit(_safe, stats_mlb.get_game_umpire, home_team_id, default={}) if home_team_id else None
         k_card = f_k_card.result()
@@ -896,9 +896,7 @@ def format_k_prop_response(*, player_name, team_abbr, headshot, stat_label, line
     distribution = _build_distribution(dist_values, line, strict_over=True)
     game_log_chart = _build_game_log_chart(splits.get("game_log") or [], line)
 
-    wind_text = ""
-    if weather and weather.get("speed_mph") is not None and not weather.get("dome"):
-        wind_text = f"Wind: {weather['speed_mph']} mph {weather.get('effect', '')}".strip() + "."
+    wind_text = _weather_wind_line(weather)
 
     last5_display = [
         {"value": s.get("value", s.get("k", 0)), "opponent": stats_mlb._MLB_TEAM_ABBR.get(s.get("opponent", ""), (s.get("opponent") or "")[:3].upper()), "date": _short_date(s.get("date", ""))}
@@ -965,7 +963,7 @@ def format_k_prop_response(*, player_name, team_abbr, headshot, stat_label, line
         },
         "environment": (
             _park_factor_label(park_factor, is_under, "strikeouts" if is_k_prop else prop_type) + " "
-            + ("Indoor — weather N/A." if weather.get("dome") else "")
+            + _weather_environment_line(weather)
             + ((" " + _umpire_line(umpire)) if _umpire_line(umpire) else "")
         ).strip(),
         "wind": wind_text,
@@ -1129,9 +1127,7 @@ def format_response(*, player_name, team_abbr, headshot, stat_label, prop_type, 
             f"{side_hits}/{vs_team['games']} hit ({side_rate}%) · avg {vs_team.get('avg', '—')}{sample_note}"
         )
 
-    wind_text = ""
-    if weather and weather.get("speed_mph") is not None and not weather.get("dome"):
-        wind_text = f"Wind: {weather['speed_mph']} mph {weather.get('effect', '')}".strip() + "."
+    wind_text = _weather_wind_line(weather)
 
     tier_label = picked_grade.get("label", "Lean")
     tier_icon = picked_grade.get("emoji", "➡️")
@@ -1249,7 +1245,7 @@ def format_response(*, player_name, team_abbr, headshot, stat_label, prop_type, 
         },
         "environment": (
             _park_factor_label(park_factor, is_under, prop_type) + " "
-            + ("Indoor — weather N/A." if weather.get("dome") else "")
+            + _weather_environment_line(weather)
             + ((" " + _umpire_line(umpire)) if _umpire_line(umpire) else "")
         ).strip(),
         "wind": wind_text,
@@ -1378,7 +1374,59 @@ def _park_factor_label(park_factor: float, is_under: bool, prop_type: str = "") 
     if park_factor <= 0.95:
         note = "suppresses offense" if not is_under else "supports Under"
         return f"Pitcher-friendly park ({park_factor:.2f}x) — {note}."
-    return f"Slightly hitter-friendly ({park_factor:.2f}x)."
+    if park_factor >= 1.02:
+        return f"Slightly hitter-friendly park ({park_factor:.2f}x)."
+    if park_factor <= 0.98:
+        return f"Slightly pitcher-friendly park ({park_factor:.2f}x)."
+    return f"Neutral park ({park_factor:.2f}x)."
+
+
+def _weather_environment_line(weather: dict) -> str:
+    """Plain-language, source-honest game-time weather and roof context."""
+    if not weather or weather.get("error"):
+        return "Game-time weather unavailable."
+    venue = weather.get("venue") or "Venue"
+    temp = weather.get("temp_f")
+    if weather.get("dome"):
+        roof = weather.get("roof_status") or "Indoor"
+        temp_text = f" · {temp}°F reported inside" if temp is not None else ""
+        return f"{venue} · roof {str(roof).lower()}{temp_text}. Outdoor wind and rain do not apply."
+
+    speed = float(weather.get("speed_mph") or 0)
+    hitter_wind = weather.get("hitter_friendly")
+    warm = temp is not None and float(temp) >= 85
+    cold = temp is not None and float(temp) <= 50
+    positive = int(speed >= 7 and hitter_wind is True) + int(warm)
+    negative = int(speed >= 7 and hitter_wind is False) + int(cold)
+    lean = (
+        "Hitter-friendly weather lean" if positive and not negative else
+        "Pitcher-friendly weather lean" if negative and not positive else
+        "Mixed/neutral weather impact"
+    )
+    roof = "roof open" if weather.get("roof_status") == "Open" else "outdoor"
+    parts = [f"{venue} · {roof}"]
+    if temp is not None:
+        parts.append(f"{temp}°F")
+    feels = weather.get("feels_like_f")
+    if feels is not None and temp is not None and abs(float(feels) - float(temp)) >= 3:
+        parts.append(f"feels {feels}°F")
+    humidity = weather.get("humidity_pct")
+    if humidity is not None:
+        parts.append(f"{humidity}% humidity")
+    rain = weather.get("rain_probability")
+    if rain is not None:
+        parts.append(f"{rain}% rain chance")
+    return " · ".join(parts) + f". {lean}."
+
+
+def _weather_wind_line(weather: dict) -> str:
+    if not weather or weather.get("error") or weather.get("dome"):
+        return ""
+    speed = weather.get("speed_mph")
+    if speed is None:
+        return ""
+    effect = weather.get("effect") or "direction unavailable"
+    return f"Wind: {speed} mph {effect}."
 
 
 def _bvp_verdict(bvp: dict, player_name: str, pitcher_name: str, is_under: bool) -> str:

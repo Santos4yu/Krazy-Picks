@@ -2943,7 +2943,7 @@ def _wind_effect(wind_from_deg: float, cf_bearing: int) -> tuple[str, bool | Non
         return "crosswind (LF→RF)", None
 
 
-def get_game_weather(home_team_abbr: str, game_time_utc: str = "") -> dict:
+def get_game_weather(home_team_abbr: str, game_time_utc: str = "", game_pk=None) -> dict:
     """
     Cached wrapper around _get_game_weather_uncached(). Open-Meteo has no
     per-caller cache of its own and this endpoint alone was the single
@@ -2953,7 +2953,7 @@ def get_game_weather(home_team_abbr: str, game_time_utc: str = "") -> dict:
     a short TTL file cache eliminates nearly all of that for repeat lookups.
     """
     from datetime import date as _date
-    cache_key = f"weather_{home_team_abbr}_{game_time_utc or _date.today().isoformat()}"
+    cache_key = f"weather_v2_{game_pk or home_team_abbr}_{game_time_utc or _date.today().isoformat()}"
     cache_file = CACHE_DIR / f"{cache_key}.json"
     if cache_file.exists():
         try:
@@ -2962,7 +2962,7 @@ def get_game_weather(home_team_abbr: str, game_time_utc: str = "") -> dict:
         except OSError:
             pass
 
-    result = _get_game_weather_uncached(home_team_abbr, game_time_utc)
+    result = _get_game_weather_uncached(home_team_abbr, game_time_utc, game_pk)
     if not result.get("error"):
         try:
             cache_file.write_text(json.dumps(result), encoding="utf-8")
@@ -2971,7 +2971,7 @@ def get_game_weather(home_team_abbr: str, game_time_utc: str = "") -> dict:
     return result
 
 
-def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "") -> dict:
+def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "", game_pk=None) -> dict:
     """
     Fetch wind conditions at tonight's venue via Open-Meteo (free, no key).
 
@@ -2988,9 +2988,77 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "") -> 
         return {"error": "Stadium not found"}
 
     lat, lon, cf_bearing, is_dome = stadium
-    if is_dome:
-        return {"dome": True, "effect": "Indoor — wind N/A", "hitter_friendly": None,
-                "speed_mph": 0, "forecast": False}
+    venue_name = ""
+    roof_type = "Fixed" if is_dome else "Open"
+    official_condition = ""
+
+    # The game feed identifies the actual venue and roof decision. That avoids
+    # pretending every retractable-roof game is indoors and also handles
+    # neutral-site or temporary home venues accurately.
+    if game_pk:
+        official = {}
+        feed_urls = [
+            f"{BASE.rsplit('/api/v1', 1)[0]}/api/v1.1/game/{game_pk}/feed/live",
+            f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live",
+        ]
+        for feed_url in feed_urls:
+            try:
+                feed_response = _SESSION.get(feed_url, timeout=6)
+                if feed_response.ok:
+                    official = feed_response.json()
+                    break
+            except (requests.RequestException, ValueError):
+                continue
+        game_data = official.get("gameData") or {}
+        venue = game_data.get("venue") or {}
+        location = venue.get("location") or {}
+        coordinates = location.get("defaultCoordinates") or {}
+        field_info = venue.get("fieldInfo") or {}
+        official_weather = game_data.get("weather") or {}
+        venue_name = venue.get("name", "")
+        roof_type = field_info.get("roofType") or roof_type
+        official_condition = str(official_weather.get("condition") or "")
+        try:
+            lat = float(coordinates.get("latitude", lat))
+            lon = float(coordinates.get("longitude", lon))
+            cf_bearing = int(round(float(location.get("azimuthAngle", cf_bearing))))
+        except (TypeError, ValueError):
+            pass
+
+        condition_l = official_condition.lower()
+        roof_closed = "roof closed" in condition_l or condition_l in {"dome", "indoors", "indoor"}
+        fixed_roof = str(roof_type).lower() in {"dome", "fixed", "indoor"}
+        if roof_closed or fixed_roof:
+            try:
+                indoor_temp = round(float(official_weather.get("temp")))
+            except (TypeError, ValueError):
+                indoor_temp = None
+            return {
+                "dome": True,
+                "roof_status": "Closed" if roof_closed else "Indoor",
+                "roof_type": roof_type,
+                "venue": venue_name,
+                "condition": official_condition or "Indoor",
+                "effect": "Roof closed — outdoor wind does not apply",
+                "hitter_friendly": None,
+                "speed_mph": 0,
+                "temp_f": indoor_temp,
+                "rain_probability": 0,
+                "forecast": False,
+                "source": "Official MLB game feed",
+            }
+        is_dome = False
+    elif is_dome:
+        return {
+            "dome": True,
+            "roof_status": "Roof status pending",
+            "roof_type": roof_type,
+            "effect": "Roof-controlled venue — wind impact pending",
+            "hitter_friendly": None,
+            "speed_mph": 0,
+            "forecast": False,
+            "source": "Venue configuration; game roof decision unavailable",
+        }
 
     # ── Try hourly game-time forecast first ───────────────────────────────────
     if game_time_utc:
@@ -3002,7 +3070,7 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "") -> 
             url = (
                 f"https://api.open-meteo.com/v1/forecast"
                 f"?latitude={lat}&longitude={lon}"
-                f"&hourly=wind_speed_10m,wind_direction_10m,temperature_2m"
+                f"&hourly=wind_speed_10m,wind_direction_10m,temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code"
                 f"&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=UTC"
                 f"&start_date={game_date}&end_date={game_date}"
             )
@@ -3013,6 +3081,11 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "") -> 
             speeds = hourly.get("wind_speed_10m", [])
             dirs   = hourly.get("wind_direction_10m", [])
             temps  = hourly.get("temperature_2m", [])
+            feels = hourly.get("apparent_temperature", [])
+            humidity = hourly.get("relative_humidity_2m", [])
+            rain_chance = hourly.get("precipitation_probability", [])
+            precipitation = hourly.get("precipitation", [])
+            weather_codes = hourly.get("weather_code", [])
 
             if target_str in times:
                 idx = times.index(target_str)
@@ -3023,14 +3096,26 @@ def _get_game_weather_uncached(home_team_abbr: str, game_time_utc: str = "") -> 
             wind_from = dirs[idx]
             temp_f    = round(temps[idx]) if idx < len(temps) else None
             effect, hf = _wind_effect(wind_from, cf_bearing)
+            if speed_mph < 7:
+                hf = None
             return {
                 "speed_mph":       speed_mph,
                 "direction_deg":   wind_from,
                 "effect":          effect,
                 "hitter_friendly": hf,
                 "temp_f":          temp_f,
+                "feels_like_f":    round(feels[idx]) if idx < len(feels) else None,
+                "humidity_pct":    round(humidity[idx]) if idx < len(humidity) else None,
+                "rain_probability": round(rain_chance[idx]) if idx < len(rain_chance) else None,
+                "precipitation_in": round(float(precipitation[idx]) / 25.4, 2) if idx < len(precipitation) else None,
+                "weather_code":    weather_codes[idx] if idx < len(weather_codes) else None,
                 "dome":            False,
+                "roof_status":     "Open" if str(roof_type).lower() == "retractable" else "Outdoor",
+                "roof_type":       roof_type,
+                "venue":           venue_name,
+                "condition":       official_condition,
                 "forecast":        True,
+                "source":          "Official MLB venue/roof context + Open-Meteo game-time forecast",
             }
         except Exception:
             pass   # fall through to current conditions

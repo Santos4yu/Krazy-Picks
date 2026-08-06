@@ -1227,6 +1227,11 @@ def format_response(*, player_name, team_abbr, headshot, stat_label, prop_type, 
             "lineup": lineup_text,
             "bullpen": _bullpen_line(opp_bullpen, opponent),
         },
+        "matchupScore": picked_grade.get("matchup_score"),
+        "matchupLabel": picked_grade.get("matchup_label"),
+        "matchupCoverage": picked_grade.get("matchup_coverage", 0),
+        "matchupAdjustment": picked_grade.get("matchup_adjustment", 0),
+        "matchupFactors": picked_grade.get("matchup_factors") or [],
         "narrative": (
             f"{player_name} has hit {side.title()} {line} in {l10.get('hits', 0)}/{l10.get('games', 0)} "
             f"of the last 10 games ({l10_rate}%), averaging {l10_avg} {stat_label} per game — "

@@ -2534,6 +2534,25 @@ function fillSplitFactor(node, p) {
 
 function fillMatchup(node, p) {
   const m = p.matchup || {};
+  const scoreCard = node.querySelector(".matchup-score-card");
+  const score = Number(p.matchupScore);
+  if (scoreCard && Number.isFinite(score)) {
+    const label = p.matchupLabel || (score >= 67 ? "Favorable" : score <= 33 ? "Unfavorable" : "Neutral");
+    const tone = label.toLowerCase();
+    scoreCard.hidden = false;
+    scoreCard.dataset.tone = tone;
+    scoreCard.querySelector(".matchup-score-value").textContent = `${Math.round(score)}/100`;
+    scoreCard.querySelector(".matchup-score-label").textContent = `${label} · ${Math.round((p.matchupCoverage || 0) * 100)}% data coverage`;
+    scoreCard.querySelector(".matchup-score-fill").style.width = `${Math.max(0, Math.min(100, score))}%`;
+    const factors = (p.matchupFactors || []).map(f => {
+      const impact = Number(f.impact || 0);
+      const signed = `${impact > 0 ? "+" : ""}${impact}`;
+      return `<div class="matchup-factor"><div><b>${escapeHtml(f.name || "Factor")}</b><small>${escapeHtml(f.detail || "Unavailable")}</small></div><strong>${signed} / ${Number(f.weight || 0)}</strong></div>`;
+    }).join("");
+    scoreCard.querySelector(".matchup-score-factors").innerHTML = factors;
+  } else if (scoreCard) {
+    scoreCard.hidden = true;
+  }
   node.querySelector(".matchup-opp").textContent = m.opponent ? `⚔️ Opponent: ${m.opponent}` : "";
   node.querySelector(".matchup-pitcher").textContent = m.pitcher ? `⚾ ${m.pitcher}` : "";
 

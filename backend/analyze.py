@@ -1053,6 +1053,108 @@ def get_no_game_reason(player_id: int, player_name: str = "This player") -> str:
 
 # ── 5. Algorithmic grading (pure arithmetic, zero API) ───────────────────────
 
+_MATCHUP_WEIGHTS = {
+    "handedness": 23, "pitcher_quality": 22, "arsenal_fit": 15,
+    "bvp": 20, "recent_form": 10, "park": 5, "weather": 5,
+}
+
+
+def _matchup_score_100(splits, side="over", pitcher=None, bvp=None,
+                       park_factor=1.0, weather=None, arsenal=None,
+                       bat_vs_pitch=None, vs_hand_splits=None) -> dict:
+    """Direction-aware 0-100 matchup grade; thin samples shrink to neutral."""
+    is_under = str(side).lower() == "under"
+    pitcher, bvp = pitcher or {}, bvp or {}
+    factors = []
+    clamp = lambda value: max(0.0, min(100.0, float(value)))
+    sided = lambda value: 100.0 - clamp(value) if is_under else clamp(value)
+
+    def add(key, raw, detail, available=True, confidence=1.0):
+        weight = _MATCHUP_WEIGHTS[key]
+        confidence = clamp(confidence * 100) / 100 if available else 0.0
+        adjusted = 50.0 + ((clamp(raw) - 50.0) * confidence if available else 0.0)
+        impact = (adjusted - 50.0) / 50.0 * weight
+        names = {"handedness": "Splits vs pitcher hand", "pitcher_quality": "Pitcher quality",
+                 "arsenal_fit": "Arsenal fit", "bvp": "Career BvP", "recent_form": "Recent form",
+                 "park": "Park factor", "weather": "Weather"}
+        factors.append({"key": key, "name": names[key], "score": round(adjusted),
+                        "impact": round(impact), "weight": weight, "available": bool(available),
+                        "confidence": round(confidence, 2), "detail": detail})
+
+    ph = pitcher.get("hand", "")
+    hand = (vs_hand_splits or {}).get(ph, {}) if ph in ("L", "R") else {}
+    hand_pa = int(hand.get("pa", 0) or 0)
+    try: hand_ops = float(str(hand.get("ops", "") or 0))
+    except (TypeError, ValueError): hand_ops = 0.0
+    other = (vs_hand_splits or {}).get("L" if ph == "R" else "R", {})
+    try: other_ops = float(str(other.get("ops", "") or 0))
+    except (TypeError, ValueError): other_ops = 0.0
+    hand_ok = hand_pa >= 20 and hand_ops > 0
+    delta = hand_ops - other_ops if other_ops > 0 else 0.0
+    detail = f"{hand_ops:.3f} OPS vs {ph}HP ({hand_pa} PA)"
+    if hand_ok and other_ops > 0: detail += f" · {delta:+.3f} vs opposite split"
+    add("handedness", sided(50 + (hand_ops - .720) * 125 + delta * 100),
+        detail if hand_ok else "Split unavailable", hand_ok, min(1.0, hand_pa / 100) ** .6 if hand_ok else 0)
+
+    try: era, fip = float(pitcher.get("era") or 0), float(pitcher.get("fip") or 0)
+    except (TypeError, ValueError): era = fip = 0.0
+    pq_ok = era > 0 or fip > 0
+    blended = era * .6 + fip * .4 if era and fip else era or fip
+    add("pitcher_quality", sided(50 + (blended - 4.10) * 12.5),
+        (f"{era:.2f} ERA / {fip:.2f} FIP" if fip else f"{blended:.2f} ERA") if pq_ok else "Starter metrics unavailable", pq_ok)
+
+    pitch_rows = {r.get("pitch_type"): r for r in (bat_vs_pitch or [])}
+    weighted = coverage = 0.0
+    for pitch in (arsenal or [])[:2]:
+        row = pitch_rows.get(pitch.get("pitch_type"))
+        if not row: continue
+        try: metric, usage = float(str(row.get("woba") or row.get("ops") or 0)), float(pitch.get("pct", 0) or 0)
+        except (TypeError, ValueError): continue
+        if metric > 0 and usage > 0:
+            if metric > .550: metric *= .445
+            weighted += metric * usage; coverage += usage
+    mix_ok = coverage >= 10; mix = weighted / coverage if mix_ok else .320
+    add("arsenal_fit", sided(50 + (mix - .320) * 166.7),
+        f"{mix:.3f} weighted wOBA across {coverage:.0f}% usage" if mix_ok else "Pitch-mix sample unavailable",
+        mix_ok, min(1.0, coverage / 60) ** .6 if mix_ok else 0)
+
+    bvp_ab = int(bvp.get("ab", 0) or 0)
+    try:
+        avg_text = str(bvp.get("avg") or ".000"); bvp_avg = float("0" + avg_text) if avg_text.startswith(".") else float(avg_text)
+    except (TypeError, ValueError): bvp_avg = 0.0
+    bvp_ok = bvp_ab >= 4
+    add("bvp", sided(50 + (bvp_avg - .250) * 100),
+        f"{bvp.get('hits', 0)}-for-{bvp_ab} ({bvp_avg:.3f})" if bvp_ok else "No meaningful history",
+        bvp_ok, min(1.0, bvp_ab / 25) ** .65 if bvp_ok else 0)
+
+    parts, form_weights = [], []
+    for key, weight in (("l10", .55), ("l20", .30), ("l5", .15)):
+        item = (splits or {}).get(key) or {}; rate = item.get("rate")
+        if rate is not None and item.get("games", 0):
+            parts.append(((100 - rate) if is_under else rate) * weight); form_weights.append(weight)
+    form_ok = bool(form_weights); form_score = sum(parts) / sum(form_weights) if form_ok else 50
+    add("recent_form", form_score, f"Weighted recent hit rate {form_score:.0f}%" if form_ok else "Recent sample unavailable", form_ok)
+
+    try: pf = float(park_factor or 1.0)
+    except (TypeError, ValueError): pf = 1.0
+    add("park", sided(50 + (pf - 1.0) * 250), f"{pf:.2f} run factor")
+    weather = weather or {}; weather_ok = bool(weather) and not weather.get("error") and not weather.get("dome")
+    weather_over, weather_detail = 50.0, "Indoor or weather unavailable"
+    if weather_ok:
+        speed = float(weather.get("speed_mph", 0) or 0); friendly = weather.get("hitter_friendly")
+        if friendly is True: weather_over += min(25, speed * 1.5)
+        elif friendly is False: weather_over -= min(25, speed * 1.5)
+        temp = weather.get("temp_f")
+        if temp is not None: weather_over += max(-10, min(10, (float(temp) - 70) * .5))
+        weather_detail = f"{weather.get('temp_f', '—')}°F, {speed:.0f} mph wind"
+    add("weather", sided(weather_over), weather_detail, weather_ok)
+
+    score = max(0, min(100, round(50 + sum(f["impact"] for f in factors) * .5)))
+    data_coverage = sum(f["weight"] for f in factors if f["available"]) / 100
+    label = "Favorable" if score >= 67 else ("Unfavorable" if score <= 33 else "Neutral")
+    return {"score": score, "label": label, "coverage": round(data_coverage, 2), "factors": factors}
+
+
 def grade_pick(
     splits:      dict,
     line:        float,
@@ -1592,6 +1694,25 @@ def grade_pick(
     if learned_weight is not None and learned_weight != 1.0:
         score = round(score * learned_weight)
 
+    if prop_type in _HITTING_PROPS:
+        matchup_grade = _matchup_score_100(
+            splits=splits, side=side, pitcher=pitcher, bvp=bvp,
+            park_factor=park_factor, weather=weather, arsenal=arsenal,
+            bat_vs_pitch=bat_vs_pitch, vs_hand_splits=vs_hand_splits,
+        )
+    else:
+        matchup_grade = {"score": None, "label": None, "coverage": 0.0, "factors": []}
+    matchup_adjustment = 0
+    if matchup_grade["score"] is not None and matchup_grade["coverage"] >= 0.45:
+        ms = matchup_grade["score"]
+        if ms >= 80: matchup_adjustment = 3
+        elif ms >= 67: matchup_adjustment = 2
+        elif ms >= 60: matchup_adjustment = 1
+        elif ms <= 20: matchup_adjustment = -3
+        elif ms <= 33: matchup_adjustment = -2
+        elif ms <= 40: matchup_adjustment = -1
+        score += matchup_adjustment
+
     # ── Risk Penalty Modifiers ────────────────────────────────────────────────
     risk_flags   = []   # accumulate active flags for the hard-cap rule
     penalty_desc = []   # human-readable penalty lines for the embed
@@ -1754,6 +1875,11 @@ def grade_pick(
     result["pitch_mix_score"] = pitch_mix_score
     result["hand_ops_score"] = hand_ops_score
     result["bullpen_score"]  = bullpen_score
+    result["matchup_score"] = matchup_grade["score"]
+    result["matchup_label"] = matchup_grade["label"]
+    result["matchup_coverage"] = matchup_grade["coverage"]
+    result["matchup_adjustment"] = matchup_adjustment
+    result["matchup_factors"] = matchup_grade["factors"]
     return result
 
 

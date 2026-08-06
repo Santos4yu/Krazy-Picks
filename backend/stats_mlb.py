@@ -104,6 +104,8 @@ def _cache_ttl_sec(cache_key: str) -> int:
     # to game time; completed game logs can be corrected by MLB after posting.
     if cache_key.startswith(("lineups_", "confirmed_pitchers_")):
         return 2 * 60
+    if cache_key.startswith(("profile_", "roster_", "active_roster_")):
+        return 30 * 60
     if cache_key.startswith(("schedule_", "gametimes_")):
         return 5 * 60
     if cache_key.startswith("gamelog_"):
@@ -2044,47 +2046,26 @@ def get_lineup_position(player_id: int) -> int | None:
     Return today's confirmed batting order position (1-9) for this player.
     Returns None if lineup hasn't been posted yet or player isn't found.
     """
-    # Use the same betting-day frame as matchup research and bypass the short
-    # file cache: a posted lineup can arrive minutes after the prior lookup.
     from vortextime import vortex_board_day
-    # Never fall back to the prior game's date after the board rolls forward.
-    # That is how yesterday's lineup was being presented as tonight's.
-    for lineup_day in (vortex_board_day(),):
-        fresh = _get("/schedule", {
-            "sportId": 1, "date": lineup_day, "hydrate": "lineups",
-        }, cache_key=None)
-        for date_entry in (fresh or {}).get("dates", []):
-            for game in date_entry.get("games", []):
-                lineups = game.get("lineups") or {}
-                for side in ("homePlayers", "awayPlayers"):
-                    for person in lineups.get(side, []):
-                        if str(person.get("id")) != str(player_id):
-                            continue
-                        order = str(person.get("battingOrder", ""))
-                        if order:
-                            return int(order[0])
-                        # A player list without an MLB battingOrder is not a
-                        # posted lineup; never infer a spot from array order.
-                        return None
-
-    from vortextime import vortex_board_day
-    today = vortex_board_day()
-    data  = _get("/schedule", {
-        "sportId": 1,
-        "date":    today,
-        "hydrate": "lineups",
+    data = _get("/schedule", {
+        "sportId": 1, "date": vortex_board_day(), "hydrate": "lineups",
     }, cache_key=None)
-    if not data:
-        return None
-    for date_entry in data.get("dates", []):
-        for g in date_entry.get("games", []):
-            lineups = g.get("lineups") or {}
+    for date_entry in (data or {}).get("dates", []):
+        for game in date_entry.get("games", []):
+            lineups = game.get("lineups") or {}
             for side in ("homePlayers", "awayPlayers"):
-                for p in lineups.get(side, []):
-                    if p.get("id") == player_id:
-                        order = str(p.get("battingOrder", ""))
-                        if order:
-                            return int(order[0])  # "100"→1, "500"→5, "900"→9
+                players = [p for p in lineups.get(side, [])
+                           if (p.get("position") or p.get("primaryPosition") or {}).get("abbreviation") != "P"]
+                # MLB returns the posted nine in batting-order sequence even
+                # when battingOrder is omitted. Fewer than nine is not a
+                # confirmed batting lineup and must never be inferred.
+                if len(players) < 9:
+                    continue
+                for index, person in enumerate(players[:9], start=1):
+                    if str(person.get("id")) != str(player_id):
+                        continue
+                    order = str(person.get("battingOrder", ""))
+                    return int(order[0]) if order and order[0].isdigit() else index
     return None
 
 
@@ -2146,20 +2127,22 @@ def get_team_lineup(team_id: int) -> list[dict]:
             side = "homePlayers" if team_str == home_id else ("awayPlayers" if team_str == away_id else None)
             if not side:
                 continue
-            players = lineups.get(side, [])
-            confirmed = [p for p in players if str(p.get("battingOrder", "")).strip()]
-            if len(confirmed) < 9:
+            players = [p for p in lineups.get(side, [])
+                       if (p.get("position") or p.get("primaryPosition") or {}).get("abbreviation") != "P"]
+            if len(players) < 9:
                 return []
-            return [
-                {
-                    "order": int(str(p.get("battingOrder"))[0]),
-                    "id": p.get("id"),
-                    "name": p.get("fullName", ""),
-                    "position": (p.get("primaryPosition") or {}).get("abbreviation", ""),
-                }
-                for p in sorted(confirmed, key=lambda item: int(str(item.get("battingOrder"))[0]))
-                if p.get("id")
-            ]
+            ordered = sorted(
+                players[:9],
+                key=lambda p: int(str(p.get("battingOrder"))[0])
+                if str(p.get("battingOrder", ""))[:1].isdigit() else players.index(p) + 1,
+            )
+            return [{
+                "order": (int(str(p.get("battingOrder"))[0])
+                          if str(p.get("battingOrder", ""))[:1].isdigit() else index),
+                "id": p.get("id"),
+                "name": p.get("fullName", ""),
+                "position": ((p.get("position") or p.get("primaryPosition") or {}).get("abbreviation", "")),
+            } for index, p in enumerate(ordered, start=1) if p.get("id")]
     return []
 
 

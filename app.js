@@ -6,6 +6,8 @@
    Saved props persist locally via localStorage only.
    ========================================================= */
 
+import comingSoonLogoSrc from "./josoicon-transparent.png";
+
 /**
  * Single source of truth for where prop research data comes from.
  * Swap this one line later (e.g. a KV store URL or API endpoint)
@@ -2931,7 +2933,7 @@ function wireSlate() {
       els.slateError.hidden = false;
       els.slateError.className = "tools-coming-soon";
       const title = button.childNodes[0]?.textContent?.trim() || "New tool";
-      els.slateError.innerHTML = `<img class="coming-soon-logo" src="/josoicon-transparent.png" alt="Krazy Picks"><span class="coming-kicker">KRAZY PICKS LAB</span><strong>${escapeHtml(title)}</strong><p>This research module is coming soon.</p><small>Attack Board is live now and remains fully available.</small>`;
+      els.slateError.innerHTML = `<img class="coming-soon-logo" src="${comingSoonLogoSrc}" alt="Krazy Picks"><span class="coming-kicker">KRAZY PICKS LAB</span><strong>${escapeHtml(title)}</strong><p>This research module is coming soon.</p><small>Attack Board is live now and remains fully available.</small>`;
       return;
     }
     if (tool === "attack") {

@@ -1,0 +1,33 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Frontend-generated files
+node_modules/
+dist/
+
+# Runtime output and local data
+*.log
+*.db
+*.sqlite
+*.sqlite3
+backend/cache/
+
+# Large generated training datasets
+v2/training/data/
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

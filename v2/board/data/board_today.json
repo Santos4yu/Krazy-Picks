@@ -1,0 +1,23 @@
+{
+  "date": "2026-07-06",
+  "props": [
+    {
+      "game_pk": 822958,
+      "home_team_name": "Tampa Bay Rays",
+      "away_team_name": "New York Yankees",
+      "player_id": 691406,
+      "player_name": "Junior Caminero",
+      "stat_type": "total_bases",
+      "model_prob": 0.4552,
+      "line": 1.5,
+      "stat_label": "Total Bases",
+      "n_books": 2,
+      "market_prob_over": 0.4621,
+      "edge": -0.0069,
+      "anchor": "consensus",
+      "best_book": "draftkings",
+      "best_odds": 101,
+      "tier": "PASS"
+    }
+  ]
+}

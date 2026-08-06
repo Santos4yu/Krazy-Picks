@@ -3931,6 +3931,37 @@ body::before,body::after{display:none}.grid-bg,.vortex-swirl,.glow-orb{display:n
 
 /* Compact game-side research: the picker is a rail, the report is the product. */
 .moneyline-research { max-width:1050px; margin:0 auto; }
+.moneyline-coming-soon {
+  width:min(760px,100%);
+  min-height:430px;
+  margin:34px auto 0;
+  padding:72px 34px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  border:1px solid rgba(91,145,226,.22);
+  border-radius:24px;
+  background:
+    radial-gradient(circle at 50% 20%,rgba(49,133,255,.13),transparent 36%),
+    radial-gradient(circle at 18% 88%,rgba(255,155,24,.09),transparent 34%),
+    linear-gradient(145deg,rgba(14,22,36,.98),rgba(6,10,18,.99));
+  box-shadow:0 28px 80px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.04);
+}
+.moneyline-coming-soon h2 { margin:10px 0 5px; font-size:clamp(42px,7vw,72px); letter-spacing:-3px; }
+.moneyline-coming-soon>strong { color:var(--accent); font:800 13px var(--font-mono); letter-spacing:2.5px; text-transform:uppercase; }
+.moneyline-coming-soon>p:last-child { max-width:560px; margin:20px 0 0; color:var(--text-dim); font-size:14px; line-height:1.75; }
+.coming-soon-orbit { position:relative; width:66px; height:66px; margin-bottom:10px; border:1px solid rgba(78,155,255,.3); border-radius:50%; box-shadow:inset 0 0 24px rgba(39,126,255,.11),0 0 36px rgba(39,126,255,.08); }
+.coming-soon-orbit::before,.coming-soon-orbit::after { content:""; position:absolute; inset:12px; border:1px solid rgba(255,164,34,.28); border-radius:50%; }
+.coming-soon-orbit::after { inset:25px; border:0; background:linear-gradient(135deg,#ff9d1c,#4da8ff); box-shadow:0 0 18px rgba(68,151,255,.32); }
+.coming-soon-orbit i { position:absolute; z-index:2; top:3px; left:29px; width:7px; height:7px; border-radius:50%; background:#61b3ff; box-shadow:0 0 12px #4da8ff; animation:moneyline-orbit 5s linear infinite; transform-origin:4px 30px; }
+@keyframes moneyline-orbit { to { transform:rotate(360deg); } }
+@media (max-width:640px) {
+  .moneyline-coming-soon { min-height:360px; margin-top:12px; padding:52px 22px; border-radius:18px; }
+  .moneyline-coming-soon h2 { letter-spacing:-2px; }
+}
+@media (prefers-reduced-motion:reduce) { .coming-soon-orbit i { animation:none; } }
 .ml-game-picker { display:flex; gap:8px; overflow-x:auto; padding:0 2px 12px; scrollbar-width:thin; }
 .ml-game-choice { flex:0 0 auto; display:grid; gap:4px; min-width:148px; padding:10px 12px; border:1px solid var(--panel-border); border-radius:11px; color:var(--text-dim); background:var(--bg-elevated); text-align:left; font:700 11px var(--font-mono); cursor:pointer; transition:border-color .16s ease, background .16s ease, color .16s ease; }
 .ml-game-choice small { color:var(--text-faint); font-size:9px; text-transform:uppercase; letter-spacing:.07em; }

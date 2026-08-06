@@ -571,7 +571,7 @@ function switchTab(tab) {
   if (tab === "saved") renderSavedGrid();
   if (tab === "slate" && !state.slateLoaded) loadSlate();
   if (tab === "v2" && !state.v2BoardLoaded) loadV2Board();
-  if ((tab === "moneyline" || tab === "nrfi") && !state.specialsLoaded) loadSpecialMarkets();
+  if (tab === "nrfi" && !state.specialsLoaded) loadSpecialMarkets();
   document.querySelectorAll(".side-link").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   window.dispatchEvent(new CustomEvent("vortex:dock-sync", { detail: { tab, saved: state.savedProps.size } }));
 }
@@ -625,7 +625,7 @@ async function loadSpecialMarkets(force = false) {
 function renderSpecialMarkets() {
   const data = state.specialsData || {};
   const nrfis = data.nrfi || [];
-  renderMoneylineResearch(data.moneyline_research || data.moneylines || []);
+  // Moneyline research is intentionally hidden while its new workspace is built.
   els.nrfiList.innerHTML = nrfis.map((p) => `<article class="market-card"><div class="market-card-top"><span class="market-badge ${p.confidence === "LEAN" ? "lean" : ""}">${escapeHtml(p.confidence || "READY")}</span><span class="market-sport">FIRST INNING</span></div><strong>${escapeHtml(p.recommendation || "—")} <em>${escapeHtml(p.away_abbr || "?")} @ ${escapeHtml(p.home_abbr || "?")}</em></strong><p class="market-matchup">${escapeHtml(p.home_pitcher || "TBD")} vs ${escapeHtml(p.away_pitcher || "TBD")}</p><div class="market-confirmed"><span>LINEUPS</span><b>Confirmed</b><span>MODEL</span><b>${escapeHtml(String(p.model_rating || p.confidence_pct || "—"))}/100</b></div></article>`).join("");
   els.nrfiEmpty.hidden = nrfis.length > 0;
 }

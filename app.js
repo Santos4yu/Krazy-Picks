@@ -396,6 +396,7 @@ function wireChromeAutoHide() {
 /* ---------- Border glow for every card surface ---------- */
 
 const CARD_GLOW_SELECTOR = [
+  ".search-box",
   ".player-profile", ".report-block", ".report-card", ".slate-card",
   ".slate-row", ".saved-card", ".v2-card", ".board-card",
   ".market-card", ".market-page-head",
@@ -1795,6 +1796,9 @@ function renderGameLogChart() {
     track.appendChild(marker);
   }
   holder.appendChild(track);
+  // Bars are oldest-to-newest, so open each window at the newest games.
+  // Users can scroll left when they want to inspect older history.
+  requestAnimationFrame(() => { holder.scrollLeft = holder.scrollWidth; });
 }
 
 function wireGameLogModal() {

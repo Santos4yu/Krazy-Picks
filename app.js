@@ -2021,21 +2021,11 @@ function renderArsenalView(data) {
     els.arsenalTbody.innerHTML = "";
     return;
   }
-  if (!teamState.pitchFilter || (teamState.pitchFilter !== "ALL" && !pitchTypes.some((p) => p.code === teamState.pitchFilter))) {
+  if (!teamState.pitchFilter || !pitchTypes.some((p) => p.code === teamState.pitchFilter)) {
     teamState.pitchFilter = pitchTypes[0].code;
   }
 
   els.arsenalFilterRow.innerHTML = "";
-  const allBtn = document.createElement("button");
-  allBtn.type = "button";
-  allBtn.className = "team-filter" + (teamState.pitchFilter === "ALL" ? " active" : "");
-  allBtn.innerHTML = `All <span class="pitch-usage">100%</span>`;
-  allBtn.title = "Combined across every pitch tonight's starter throws";
-  allBtn.addEventListener("click", () => {
-    teamState.pitchFilter = "ALL";
-    renderArsenalView(data);
-  });
-  els.arsenalFilterRow.appendChild(allBtn);
   pitchTypes.forEach((p) => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -2050,35 +2040,19 @@ function renderArsenalView(data) {
     els.arsenalFilterRow.appendChild(btn);
   });
 
-  const selectedPitch = teamState.pitchFilter === "ALL"
-    ? null
-    : pitchTypes.find((p) => p.code === teamState.pitchFilter);
+  const selectedPitch = pitchTypes.find((p) => p.code === teamState.pitchFilter);
   if (els.arsenalSummary) {
     if (selectedPitch) {
       const usage = Number.isFinite(Number(selectedPitch.usage)) ? `${Number(selectedPitch.usage).toFixed(1)}% usage` : "Usage unavailable";
       const speed = Number.isFinite(Number(selectedPitch.speed)) ? ` · ${Number(selectedPitch.speed).toFixed(1)} mph` : "";
-      els.arsenalSummary.innerHTML = `<strong>${escapeHtml(selectedPitch.name || selectedPitch.code)}</strong><span>${usage}${speed}</span>`;
-    } else {
-      els.arsenalSummary.innerHTML = `<strong>Full pitch mix</strong><span>Usage-weighted results across every pitch shown above</span>`;
+      const season = data.source?.season || "Current season";
+      els.arsenalSummary.innerHTML = `<div><strong>${escapeHtml(selectedPitch.name || selectedPitch.code)}</strong><small>${escapeHtml(String(season))} pitcher usage · MLB Stats API</small></div><span>${usage}${speed}</span>`;
     }
-  }
-
-  // "All" = PA-weighted aggregate across every pitch type tonight's starter
-  // actually throws (not every pitch this batter has ever seen from anyone)
-  // -- answers "how does he do against this pitcher's whole mix," using
-  // only data the modal already fetched, no new calls.
-  function combinedStat(byPitch) {
-    const rows = pitchTypes.map((p) => byPitch[p.code]).filter(Boolean);
-    if (!rows.length) return null;
-    const pa = rows.reduce((s, r) => s + (r.pa || 0), 0);
-    if (!pa) return null;
-    const wAvg = (key) => rows.reduce((s, r) => s + (parseFloat(r[key]) || 0) * (r.pa || 0), 0) / pa;
-    return { pa, avg: wAvg("avg").toFixed(3), k_pct: Math.round(wAvg("k_pct") * 10) / 10 };
   }
 
   els.arsenalTbody.innerHTML = "";
   (data.pitchRows || []).forEach((row) => {
-    const stat = teamState.pitchFilter === "ALL" ? combinedStat(row.byPitch || {}) : (row.byPitch || {})[teamState.pitchFilter];
+    const stat = (row.byPitch || {})[teamState.pitchFilter];
     const tr = document.createElement("tr");
     if (!stat) {
       tr.innerHTML = `
@@ -2434,7 +2408,7 @@ function fillPitchArsenal(node, p) {
     return;
   }
   block.hidden = false;
-  block.querySelector(".arsenal-sub").textContent = p.pitchArsenalLabel || "";
+  block.querySelector(".arsenal-sub").textContent = [p.pitchArsenalLabel, p.pitchArsenalSource].filter(Boolean).join(" · ");
 
   const holder = block.querySelector(".arsenal-rows");
   holder.innerHTML = "";
@@ -2452,15 +2426,11 @@ function fillPitchArsenal(node, p) {
 
     const vs = pitch.batterVs;
     if (vs) {
-      const tierClass =
-        vs.tier === "Crushes it" ? "vs-tier-elite" :
-        vs.tier === "Strong" ? "vs-tier-good" :
-        vs.tier === "Struggles" ? "vs-tier-bad" : "vs-tier-avg";
       const detail = document.createElement("div");
       detail.className = "arsenal-vs";
       detail.innerHTML = `
-        <span class="vs-tier ${tierClass}">${escapeHtml(vs.tier)}</span>
-        <span class="vs-stats">${escapeHtml(vs.avg)} AVG · ${escapeHtml(vs.slg)} SLG · ${escapeHtml(String(vs.whiffPct))}% whiff <span class="vs-pa">(${vs.pa} PA)</span></span>
+        <span class="vs-tier vs-tier-avg">${escapeHtml(String(vs.season || "Season"))}</span>
+        <span class="vs-stats">${formatBattingAverage(vs.avg)} AVG · ${formatBattingAverage(vs.slg)} SLG · ${escapeHtml(String(vs.whiffPct))}% whiff <span class="vs-pa">(${vs.pa} PA · all MLB pitchers)</span></span>
       `;
       holder.appendChild(detail);
     }

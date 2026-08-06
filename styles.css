@@ -4480,6 +4480,8 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
   background:rgba(13,23,39,.72);
 }
 .pitch-selection-summary strong { color:#f4f6fa; font-size:11px; }
+.pitch-selection-summary > div { display:grid; gap:3px; }
+.pitch-selection-summary small { color:#66758d; font:700 7.5px var(--font-mono); letter-spacing:.25px; }
 .pitch-selection-summary span { color:#8290a7; font:700 9px var(--font-mono); text-align:right; }
 .team-filter .pitch-usage { margin-left:4px; color:var(--accent); font-size:8px; }
 

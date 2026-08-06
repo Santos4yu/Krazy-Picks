@@ -31,6 +31,7 @@ import time
 import json
 import math
 import logging
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -82,7 +83,7 @@ logging.basicConfig(level=logging.INFO, format="  %(levelname)s  %(message)s")
 # ── Constants ────────────────────────────────────────────────────────────────
 BASE          = "https://mlb-proxy.damian209466-d45.workers.dev/api/v1"
 BASE_FALLBACK = "https://statsapi.mlb.com/api/v1"
-SEASON        = 2026
+SEASON        = datetime.now(timezone.utc).year
 REQUEST_DELAY = 0.2   # seconds between calls — polite rate limiting
 TIMEOUT       = 12    # seconds per request
 CACHE_DIR     = Path(__file__).parent / "cache" / "mlb_stats"
@@ -95,15 +96,22 @@ except OSError:
     CACHE_DIR = Path(tempfile.gettempdir()) / "vortex_mlb_stats_cache"
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Cache freshness. Previously cache files never expired, so a game log fetched in
-# the morning was served stale all day (why /player showed the *previous* game).
-# Volatile, date-keyed data now refreshes hourly; season-long aggregates daily.
-_VOLATILE_PREFIXES = ("gamelog_", "schedule_", "gametimes_", "lineups_", "umpires_", "confirmed_pitchers_")
-
+# Accuracy-first cache freshness by data type. Live lineup/schedule information
+# refreshes within minutes; slower-changing season aggregates refresh every few hours.
 def _cache_ttl_sec(cache_key: str) -> int:
-    # Extended TTL so pre-warmed cache survives a full day on the server.
-    # warm_cache.py is run locally each morning to refresh these files.
-    return 14 * 3600 if cache_key.startswith(_VOLATILE_PREFIXES) else 48 * 3600
+    # Accuracy-first freshness. Lineups and probable starters can change close
+    # to game time; completed game logs can be corrected by MLB after posting.
+    if cache_key.startswith(("lineups_", "confirmed_pitchers_")):
+        return 2 * 60
+    if cache_key.startswith(("schedule_", "gametimes_")):
+        return 5 * 60
+    if cache_key.startswith("gamelog_"):
+        return 15 * 60
+    if cache_key.startswith("umpires_"):
+        return 60 * 60
+    if cache_key.startswith("arsenal_"):
+        return 60 * 60
+    return 6 * 3600
 
 def clear_cache() -> int:
     """Delete every cached MLB API response. Used by a forced board refresh."""
@@ -901,7 +909,7 @@ def get_bvp_history(batter_id: int, pitcher_id: int) -> dict:
     # Aggregate career totals
     career: dict = {
         "ab": 0, "hits": 0, "hr": 0, "rbi": 0,
-        "k": 0, "bb": 0, "tb": 0, "pa": 0,
+        "k": 0, "bb": 0, "hbp": 0, "sf": 0, "tb": 0, "pa": 0,
     }
     seasons = []
     for sp in splits:
@@ -912,6 +920,8 @@ def get_bvp_history(batter_id: int, pitcher_id: int) -> dict:
         career["rbi"]  += int(s.get("rbi", 0))
         career["k"]    += int(s.get("strikeOuts", 0))
         career["bb"]   += int(s.get("baseOnBalls", 0))
+        career["hbp"]  += int(s.get("hitByPitch", 0))
+        career["sf"]   += int(s.get("sacFlies", 0))
         career["tb"]   += int(s.get("totalBases", 0))
         career["pa"]   += int(s.get("plateAppearances", 0))
         seasons.append({
@@ -924,11 +934,12 @@ def get_bvp_history(batter_id: int, pitcher_id: int) -> dict:
             "k":      int(s.get("strikeOuts", 0)),
         })
 
-    ab   = career["ab"] or 1
-    avg  = f".{int(career['hits'] / ab * 1000):03d}"
-    slg  = career["tb"] / ab
-    obp  = (career["hits"] + career["bb"]) / max(career["pa"], 1)
-    ops  = f"{slg + obp:.3f}"
+    ab = career["ab"]
+    avg = career["hits"] / ab if ab else 0
+    slg = career["tb"] / ab if ab else 0
+    obp_den = ab + career["bb"] + career["hbp"] + career["sf"]
+    obp = (career["hits"] + career["bb"] + career["hbp"]) / obp_den if obp_den else 0
+    ops = slg + obp
 
     sample_label = (
         "large sample"  if career["ab"] >= 20 else
@@ -940,15 +951,15 @@ def get_bvp_history(batter_id: int, pitcher_id: int) -> dict:
     return {
         "ab":      career["ab"],
         "hits":    career["hits"],
-        "avg":     avg,
-        "obp":     f".{int(obp * 1000):03d}",
-        "slg":     f".{int(slg * 1000):03d}",
+        "avg":     f"{avg:.3f}".lstrip("0"),
+        "obp":     f"{obp:.3f}".lstrip("0"),
+        "slg":     f"{slg:.3f}".lstrip("0"),
         "hr":      career["hr"],
         "rbi":     career["rbi"],
         "k":       career["k"],
         "bb":      career["bb"],
         "tb":      career["tb"],
-        "ops":     ops,
+        "ops":     f"{ops:.3f}",
         "sample":  sample_label,
         "seasons": seasons,
     }
@@ -1411,7 +1422,7 @@ def get_batter_arsenal_stats(batter_id: int) -> list[dict]:
     table = None
     if cache_file.exists():
         try:
-            if (time.time() - cache_file.stat().st_mtime) < 43200:  # 12h
+            if (time.time() - cache_file.stat().st_mtime) < 3600:  # 1h
                 table = json.loads(cache_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             pass
@@ -2117,12 +2128,12 @@ def get_team_lineup(team_id: int) -> list[dict]:
     Returns [{order, id, name, position}], position = fielding abbreviation
     (e.g. "SS", "DH").
     """
-    from datetime import date as _date
-    today = _date.today().strftime("%Y-%m-%d")
+    from vortextime import vortex_board_day
+    today = vortex_board_day()
     data = _get("/schedule", {
         "sportId": 1, "date": today,
         "hydrate": "lineups",
-    }, cache_key=f"lineups_{today}")
+    }, cache_key=None)
     if not data:
         return []
     team_str = str(team_id)

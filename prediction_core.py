@@ -21,6 +21,7 @@ Local dev / smoke test: python prediction_core.py "<player>" "<stat label>" <lin
 
 import json
 import sys
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -430,7 +431,7 @@ def compute_tool(tool: str) -> dict:
                         if split:
                             avg = _number(split["avg"])
                             lineup_note = "Confirmed batting order." if confirmed_lineup else "Active-roster candidate; batting order is not posted yet."
-                            game_rows.append((avg + split["ab"] / 1000, {"title": f"{hitter_name} vs {pitcher_name}", "badge": "Career BvP sample", "tone": "good" if avg >= .300 else "neutral", "summary": f"{split['hits']}-for-{split['ab']} ({split['avg']}) in documented plate appearances against this pitcher.", "evidence": [{"label": "Career line", "value": f"{split['hits']}-{split['ab']}", "detail": "Hits-at bats vs this pitcher"}, {"label": "Average", "value": split["avg"], "detail": "Career head-to-head"}, {"label": "Extra-base", "value": f"{split['hr']} HR", "detail": f"{split['bb']} BB, {split['k']} K"}], "caution": f"{lineup_note} Small BvP samples are descriptive, not predictive on their own.", "score": avg}))
+                            game_rows.append((avg + split["ab"] / 1000, {"title": f"{hitter_name} vs {pitcher_name}", "badge": "Career BvP sample", "tone": "good" if avg >= .300 else "neutral", "summary": f"{split['hits']}-for-{split['ab']} ({split['avg']}) in documented at-bats against this pitcher.", "evidence": [{"label": "Career line", "value": f"{split['hits']}-{split['ab']}", "detail": "Hits-at bats vs this pitcher"}, {"label": "Average", "value": split["avg"], "detail": "Career head-to-head"}, {"label": "Extra-base", "value": f"{split['hr']} HR", "detail": f"{split['bb']} BB, {split['k']} K"}], "caution": f"{lineup_note} Small BvP samples are descriptive, not predictive on their own.", "score": avg}))
             rich_rows.extend(entry for _, entry in sorted(game_rows, key=lambda item: item[0], reverse=True)[:10])
     rich_rows.sort(key=lambda row: row.get("score", 0), reverse=True)
     return {"date": today, "entries": rich_rows[:16], "tool": tool}
@@ -1288,8 +1289,10 @@ def format_response(*, player_name, team_abbr, headshot, stat_label, prop_type, 
         "pitchArsenal": _format_arsenal(arsenal, bat_vs_pitch),
         "pitchArsenalLabel": (
             (f"{pitcher.get('name', 'Opposing pitcher')}'s arsenal" if pitcher else "Opposing pitcher's arsenal")
-            + (f" · {player_name.split()[-1]}'s season numbers vs each pitch type (all pitchers)" if bat_vs_pitch else "")
+            + (f" · {player_name.split()[-1]}'s {stats_mlb.SEASON} results vs each pitch type (all MLB pitchers)" if bat_vs_pitch else "")
         ),
+        "pitchArsenalSource": "Official MLB Stats API pitch mix / Baseball Savant Pitch Arsenal Stats",
+        "pitchArsenalAsOf": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         # Lightweight IDs only -- the actual lineup/arsenal-vs-batters lookup
         # (9 batters x several calls each) is fetched lazily via /api/team-insights
         # only when the user opens that view, not on every card load.
@@ -1623,15 +1626,15 @@ def _research_meta(*, prop_type: str, side: str, line: float, l10: dict, l20: di
     has_weather = bool(weather)
     has_arsenal = bool(arsenal)
     is_pitcher = prop_type.startswith("pitcher_")
-    sources = ["Recent game log", "Exact prop line"]
+    sources = ["MLB Stats API game log", "User-selected exact prop line"]
     if probable:
-        sources.append("Probable starter")
+        sources.append("MLB probable starter")
     if confirmed_lineup:
-        sources.append("Confirmed batting order")
+        sources.append("MLB confirmed batting order")
     if has_weather:
         sources.append("Park & weather")
     if has_arsenal:
-        sources.append("Pitch arsenal")
+        sources.append("MLB / Baseball Savant pitch data")
     if is_pitcher and opponent_k:
         sources.append("Opponent strikeout profile")
 
@@ -1817,6 +1820,13 @@ def _build_team_insights(opp_team_id: int, opp_pitcher_id, opp_pitcher_name: str
             for p in pitcher_arsenal if p.get("pitch_type")
         ],
         "pitchRows": pitch_rows,
+        "source": {
+            "pitchMix": "MLB Stats API pitchArsenal",
+            "batterPitchResults": "Baseball Savant Pitch Arsenal Stats",
+            "season": stats_mlb.SEASON,
+            "scope": "Batter results are season totals vs all MLB pitchers, grouped by pitch type; minimum 10 PA.",
+            "asOf": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        },
     }
 
 
@@ -1856,18 +1866,13 @@ def _format_arsenal(arsenal: list, bat_vs_pitch: list = None) -> list:
         }
         perf = perf_map.get(p.get("pitch_type"))
         if perf:
-            woba = _to_float(perf.get("woba"))
             entry["batterVs"] = {
                 "avg": perf.get("avg"),
                 "slg": perf.get("slg"),
                 "woba": perf.get("woba"),
                 "whiffPct": perf.get("whiff_pct"),
                 "pa": perf.get("pa"),
-                # League-avg wOBA is ~.320; tiers mirror the grading thresholds.
-                "tier": ("Crushes it" if woba is not None and woba >= 0.380
-                         else "Strong" if woba is not None and woba >= 0.350
-                         else "Struggles" if woba is not None and woba < 0.290
-                         else "Average"),
+                "season": stats_mlb.SEASON,
             }
         out.append(entry)
     return out

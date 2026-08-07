@@ -295,6 +295,7 @@
   <button type="button" class="side-link active" data-tab="research">⌕ <span>research</span></button>
   <button type="button" class="side-link" data-tab="slate">◉ <span>slate</span></button>
   <button type="button" class="side-link" data-tab="v2">▦ <span>props</span></button>
+  <button type="button" class="side-link" data-tab="builder">✦ <span>parlay builder</span></button>
   <button type="button" class="side-link" data-tab="moneyline">◈ <span>moneylines</span></button>
   <button type="button" class="side-link" data-tab="nrfi">◌ <span>nrfi / yrfi</span></button>
   <button type="button" class="side-link" data-tab="saved">♡ <span>saved</span></button>
@@ -314,6 +315,7 @@
       <button class="tab-btn active" data-tab="research">Research</button>
       <button class="tab-btn" data-tab="slate">Tools</button>
       <button class="tab-btn" data-tab="v2">Props</button>
+      <button class="tab-btn" data-tab="builder">Parlay</button>
       <button class="tab-btn" data-tab="saved">Saved <span class="tab-count" id="saved-count">0</span></button>
       <span class="tab-indicator" id="tab-indicator"></span>
     </nav>
@@ -450,6 +452,24 @@
   <p class="empty-state" id="v2-board-empty" hidden>The board is empty right now — it fills as soon as the data engine runs.</p>
   <p class="slate-loading" id="v2-board-loading" hidden>Loading today's board…</p>
   <p class="slate-error" id="v2-board-error" hidden></p>
+</section>
+
+<!-- AUTOMATIC PARLAY BUILDER -->
+<section class="tab-panel" id="panel-builder" hidden>
+  <div class="builder-shell">
+    <div class="builder-hero">
+      <div><p class="eyebrow">KRAZY PICKS · QUALIFIED BUILDS</p><h2>Parlay Builder</h2><p>Builds from live, decision-ready props only. Matchup quality, form, projection, stability, coverage, and correlation all have to agree.</p></div>
+      <div class="builder-orbit" aria-hidden="true"><i></i><i></i><i></i><b>KP</b></div>
+    </div>
+    <div class="builder-controls">
+      <fieldset><legend>Legs</legend><div class="builder-segment" id="builder-leg-buttons"><button type="button" class="active" data-legs="2">2</button><button type="button" data-legs="3">3</button><button type="button" data-legs="4">4</button><button type="button" data-legs="5">5</button><button type="button" data-legs="6">6</button></div></fieldset>
+      <fieldset><legend>Build style</legend><div class="builder-segment" id="builder-mode-buttons"><button type="button" class="active" data-mode="safe">Safest</button><button type="button" data-mode="balanced">Balanced</button><button type="button" data-mode="payout">Higher payout</button></div></fieldset>
+      <label class="builder-check"><input type="checkbox" id="builder-same-game" /><span>Allow limited same-game legs</span></label>
+      <button type="button" class="builder-generate" id="builder-generate"><span>Build Best Parlay</span><i aria-hidden="true">✦</i></button>
+    </div>
+    <div class="builder-status" id="builder-status">Choose your settings, then build from the current live board.</div>
+    <div class="builder-result" id="builder-result" hidden></div>
+  </div>
 </section>
 
 <!-- SAVED TAB -->

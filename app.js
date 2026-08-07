@@ -109,6 +109,10 @@ const state = {
   v2BoardLoaded: false,
   v2BoardData: null,
   boardFilter: "all",
+  builderLegs: 2,
+  builderMode: "safe",
+  builderResult: [],
+  builderLocked: new Set(),
   specialsLoaded: false,
   specialsData: null,
   moneylineGamePk: null,
@@ -185,6 +189,7 @@ async function init() {
   renderSavedGrid();
   wireSlate();
   wireV2Board();
+  wireParlayBuilder();
   wireAdminPanel();
   wireSidePanel();
   wireSpecialMarkets();
@@ -234,6 +239,7 @@ function cacheEls() {
   els.slateRefreshBtn = document.getElementById("slate-refresh-btn");
 
   els.panelV2 = document.getElementById("panel-v2");
+  els.panelBuilder = document.getElementById("panel-builder");
   els.panelMoneyline = document.getElementById("panel-moneyline");
   els.panelNrfi = document.getElementById("panel-nrfi");
   els.panelAdmin = document.getElementById("panel-admin");
@@ -257,6 +263,12 @@ function cacheEls() {
   els.v2BoardDate = document.getElementById("v2-board-date");
   els.v2RefreshBtn = document.getElementById("v2-refresh-btn");
   els.boardFilterRow = document.getElementById("board-filter-row");
+  els.builderLegButtons = document.getElementById("builder-leg-buttons");
+  els.builderModeButtons = document.getElementById("builder-mode-buttons");
+  els.builderSameGame = document.getElementById("builder-same-game");
+  els.builderGenerate = document.getElementById("builder-generate");
+  els.builderStatus = document.getElementById("builder-status");
+  els.builderResult = document.getElementById("builder-result");
 
   els.v2PinOverlay = document.getElementById("v2-pin-overlay");
   els.v2PinInput = document.getElementById("v2-pin-input");
@@ -564,6 +576,7 @@ function switchTab(tab) {
   els.panelResearch.hidden = tab !== "research";
   els.panelSlate.hidden = tab !== "slate";
   els.panelV2.hidden = tab !== "v2";
+  els.panelBuilder.hidden = tab !== "builder";
   els.panelMoneyline.hidden = tab !== "moneyline";
   els.panelNrfi.hidden = tab !== "nrfi";
   els.panelAdmin.hidden = tab !== "admin";
@@ -573,6 +586,7 @@ function switchTab(tab) {
   if (tab === "saved") renderSavedGrid();
   if (tab === "slate" && !state.slateLoaded) loadSlate();
   if (tab === "v2" && !state.v2BoardLoaded) loadV2Board();
+  if (tab === "builder" && !state.v2BoardLoaded) loadV2Board();
   if (tab === "nrfi" && !state.specialsLoaded) loadSpecialMarkets();
   document.querySelectorAll(".side-link").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   window.dispatchEvent(new CustomEvent("vortex:dock-sync", { detail: { tab, saved: state.savedProps.size } }));
@@ -3311,6 +3325,184 @@ function renderBotBoard(data) {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
     });
     els.v2BoardList.appendChild(row);
+  });
+}
+
+/* ---------- Automatic Parlay Builder ---------- */
+
+const BUILDER_MODES = {
+  safe: { label: "Safest", minMatchup: 65, minL10: 65, minL20: 55, minCoverage: .55, maxPerGame: 1 },
+  balanced: { label: "Balanced", minMatchup: 55, minL10: 60, minL20: 50, minCoverage: .45, maxPerGame: 1 },
+  payout: { label: "Higher payout", minMatchup: 50, minL10: 55, minL20: 48, minCoverage: .40, maxPerGame: 1 },
+};
+
+function builderKey(p) {
+  return [p.player_name, p.stat_type, p.line, p.stats?.side || "over"].join("|");
+}
+
+function builderEffectiveRate(stats, windowName) {
+  const directValue = stats[`eff_${windowName}`];
+  const direct = directValue == null || directValue === "" ? NaN : Number(directValue);
+  if (Number.isFinite(direct)) return direct;
+  const rawValue = stats.splits?.[windowName]?.rate;
+  const raw = rawValue == null || rawValue === "" ? NaN : Number(rawValue);
+  if (!Number.isFinite(raw)) return null;
+  return stats.side === "under" ? 100 - raw : raw;
+}
+
+function parlayCandidate(p, modeName) {
+  const mode = BUILDER_MODES[modeName];
+  const stats = p.stats || {};
+  const matchup = Number(stats.matchup_score);
+  const coverage = Number(stats.matchup_coverage);
+  const l10 = builderEffectiveRate(stats, "l10");
+  const l20 = builderEffectiveRate(stats, "l20");
+  const edge = Number(stats.proj_edge);
+  const stability = String(stats.stability_tier || "").toUpperCase();
+  const conflicts = stats.matchup_conflicts || [];
+  const pitcherMarket = /strikeout|outs|hits allowed|earned runs/i.test(p.stat_type || "");
+  const confirmed = pitcherMarket
+    ? Boolean(stats.player_id && (stats.pitcher?.validated_role || stats.pitcher?.games_started || stats.pitcher?.era))
+    : Number.isFinite(Number(stats.lineup_spot ?? stats.lineup_pos));
+  const reasons = [];
+  if (!["ELITE", "STRONG"].includes(String(p.tier || "").toUpperCase())) reasons.push("tier below Strong");
+  if (!Number.isFinite(matchup) || matchup < mode.minMatchup) reasons.push(`matchup below ${mode.minMatchup}`);
+  if (!Number.isFinite(coverage) || coverage < mode.minCoverage) reasons.push("thin matchup coverage");
+  if (!Number.isFinite(l10) || l10 < mode.minL10) reasons.push(`L10 below ${mode.minL10}%`);
+  if (Number.isFinite(l20) && l20 < mode.minL20) reasons.push("L20 does not support the side");
+  if (modeName !== "payout" && (!Number.isFinite(edge) || edge <= 0)) reasons.push("no positive projection edge");
+  if (modeName === "safe" && ["LOW", "VOLATILE"].includes(stability)) reasons.push("unstable recent values");
+  if (!confirmed) reasons.push(pitcherMarket ? "starter role not confirmed" : "lineup spot not confirmed");
+  if (conflicts.length) reasons.push("matchup contradiction");
+  if (Number(stats.matchup_adjustment) < 0) reasons.push("matchup grades against the pick");
+  if (reasons.length) return { valid: false, reasons };
+
+  const stabilityScore = stability === "HIGH" ? 92 : stability === "MEDIUM" ? 76 : stability === "LOW" ? 52 : 65;
+  const projectionScore = Number.isFinite(edge) ? Math.max(35, Math.min(100, 55 + edge * 22)) : 45;
+  const longRate = Number.isFinite(l20) ? l20 : l10;
+  const quality = .30 * l10 + .20 * matchup + .15 * coverage * 100 + .15 * projectionScore + .10 * stabilityScore + .10 * longRate;
+  const reliability = Math.max(.45, Math.min(.95, coverage * (stabilityScore / 100) * (Number.isFinite(l20) ? 1 : .86)));
+  const adjustedProb = Math.max(.50, Math.min(.86, 50 + (l10 - 50) * reliability)) / 100;
+  return {
+    valid: true, prop: p, key: builderKey(p), quality: Math.round(quality), adjustedProb,
+    matchup, coverage, l10, l20, edge, stability: stability || "UNKNOWN", pitcherMarket,
+    gameKey: String(stats.game_pk || `${stats.opponent || "unknown"}|${p.commence_time || "time-pending"}`),
+    teamKey: stats.is_home ? "home" : "away",
+  };
+}
+
+function rankedParlayCandidates(modeName) {
+  const rows = (state.v2BoardData?.props || []).map((p) => parlayCandidate(p, modeName)).filter((c) => c.valid);
+  return rows.sort((a, b) => {
+    if (modeName === "payout") return (Number(b.prop.vortex_score) - Number(a.prop.vortex_score)) || b.quality - a.quality;
+    return b.quality - a.quality || b.matchup - a.matchup;
+  });
+}
+
+function builderCompatible(candidate, selected, allowSameGame, modeName) {
+  if (selected.some((leg) => leg.key === candidate.key || leg.prop.player_name === candidate.prop.player_name)) return false;
+  const sameGame = selected.filter((leg) => leg.gameKey === candidate.gameKey);
+  const maxPerGame = allowSameGame ? (modeName === "safe" ? 2 : 3) : BUILDER_MODES[modeName].maxPerGame;
+  if (sameGame.length >= maxPerGame) return false;
+  if (sameGame.some((leg) => leg.pitcherMarket !== candidate.pitcherMarket)) return false;
+  return true;
+}
+
+function selectParlayLegs(excludeKey = "") {
+  const candidates = rankedParlayCandidates(state.builderMode);
+  const locked = state.builderResult.filter((leg) => state.builderLocked.has(leg.key) && leg.key !== excludeKey);
+  const selected = [...locked];
+  for (const candidate of candidates) {
+    if (candidate.key === excludeKey || selected.length >= state.builderLegs) continue;
+    if (builderCompatible(candidate, selected, els.builderSameGame.checked, state.builderMode)) selected.push(candidate);
+  }
+  return { selected, qualified: candidates.length };
+}
+
+function builderCombinedProbability(legs) {
+  let probability = legs.reduce((total, leg) => total * leg.adjustedProb, 1);
+  const gameCounts = {};
+  legs.forEach((leg) => { gameCounts[leg.gameKey] = (gameCounts[leg.gameKey] || 0) + 1; });
+  const correlatedExtras = Object.values(gameCounts).reduce((n, count) => n + Math.max(0, count - 1), 0);
+  probability *= Math.pow(.92, correlatedExtras) * Math.pow(.98, Math.max(0, legs.length - 2));
+  return { probability: probability * 100, correlatedExtras };
+}
+
+function renderBuilderResult(qualified = 0) {
+  const legs = state.builderResult;
+  if (legs.length < state.builderLegs) {
+    els.builderResult.hidden = false;
+    els.builderResult.innerHTML = `<div class="builder-no-play"><span>NO QUALIFIED BUILD</span><h3>${legs.length} of ${state.builderLegs} legs cleared every gate</h3><p>${qualified} candidate${qualified === 1 ? "" : "s"} qualified individually, but correlation and duplicate-player rules prevented a valid ${state.builderLegs}-leg parlay. Lower the leg count, switch mode, or allow limited same-game legs.</p></div>`;
+    els.builderStatus.textContent = "Krazy Picks refused to force weak or conflicting legs.";
+    return;
+  }
+  const combined = builderCombinedProbability(legs);
+  const avgQuality = legs.reduce((sum, leg) => sum + leg.quality, 0) / legs.length;
+  const avgCoverage = legs.reduce((sum, leg) => sum + leg.coverage, 0) / legs.length * 100;
+  const risk = combined.correlatedExtras ? "Managed" : "Low";
+  els.builderResult.hidden = false;
+  els.builderResult.innerHTML = `
+    <div class="builder-summary">
+      <div><span>ESTIMATED PARLAY PROBABILITY</span><strong id="builder-probability">0.0%</strong><small>Reliability-shrunk · not a guaranteed hit rate</small></div>
+      <div class="builder-summary-grid"><p><span>AVG LEG QUALITY</span><b>${avgQuality.toFixed(0)}/100</b></p><p><span>DATA COVERAGE</span><b>${avgCoverage.toFixed(0)}%</b></p><p><span>CORRELATION</span><b>${risk}</b></p><p><span>BUILD</span><b>${BUILDER_MODES[state.builderMode].label}</b></p></div>
+    </div>
+    <div class="builder-legs">${legs.map((leg, index) => builderLegHtml(leg, index)).join("")}</div>
+    <div class="builder-footer"><p>Every leg is model-aligned and lineup/starter qualified. Recheck prices and scratches before placing.</p><button type="button" id="builder-rebuild">Rebuild unlocked legs</button></div>`;
+  els.builderStatus.textContent = `${legs.length}-leg ${BUILDER_MODES[state.builderMode].label.toLowerCase()} build created from ${qualified} qualified props.`;
+  requestAnimationFrame(() => countUpEl("builder-probability", combined.probability, { decimals: 1, suffix: "%", duration: 850 }));
+  els.builderResult.querySelectorAll("[data-builder-lock]").forEach((button) => button.addEventListener("click", () => {
+    const key = button.dataset.builderLock;
+    if (state.builderLocked.has(key)) state.builderLocked.delete(key); else state.builderLocked.add(key);
+    renderBuilderResult(qualified);
+  }));
+  els.builderResult.querySelectorAll("[data-builder-replace]").forEach((button) => button.addEventListener("click", () => {
+    const replacedKey = button.dataset.builderReplace;
+    const previousLocks = new Set(state.builderLocked);
+    state.builderResult.forEach((leg) => {
+      if (leg.key !== replacedKey) state.builderLocked.add(leg.key);
+    });
+    const result = selectParlayLegs(replacedKey);
+    state.builderResult = result.selected;
+    state.builderLocked = new Set([...previousLocks].filter((key) => state.builderResult.some((leg) => leg.key === key)));
+    renderBuilderResult(result.qualified);
+  }));
+  document.getElementById("builder-rebuild")?.addEventListener("click", () => runParlayBuilder());
+}
+
+function builderLegHtml(leg, index) {
+  const p = leg.prop, stats = p.stats || {}, locked = state.builderLocked.has(leg.key);
+  const side = stats.side === "under" ? "Under" : "Over";
+  const photo = `https://img.mlbstatic.com/mlb-photos/image/upload/w_120,q_auto:best/v1/people/${stats.player_id}/headshot/silo/current`;
+  return `<article class="builder-leg" style="--leg-delay:${index * 80}ms"><div class="builder-leg-rank">${index + 1}</div><img src="${photo}" alt="" loading="lazy" /><div class="builder-leg-main"><div><h3>${escapeHtml(p.player_name)}</h3><span class="builder-anchor">${leg.quality >= 80 ? "ANCHOR" : leg.quality >= 70 ? "CORE" : "SUPPORTING"}</span></div><strong>${side} ${escapeHtml(String(p.line))} ${escapeHtml(p.stat_type)}</strong><p><span>Matchup ${Math.round(leg.matchup)}</span><span>L10 ${Math.round(leg.l10)}%</span><span>L20 ${Number.isFinite(leg.l20) ? `${Math.round(leg.l20)}%` : "—"}</span><span>Edge ${Number.isFinite(leg.edge) ? `${leg.edge >= 0 ? "+" : ""}${leg.edge.toFixed(2)}` : "—"}</span></p><small>${escapeHtml(stats.opponent ? `${stats.is_home ? "vs" : "@"} ${stats.opponent}` : "Matchup pending")} · ${leg.stability.toLowerCase()} stability · ${Math.round(leg.coverage * 100)}% coverage</small></div><div class="builder-leg-score"><span>LEG SCORE</span><b>${leg.quality}</b><small>${(leg.adjustedProb * 100).toFixed(1)}% adj.</small></div><div class="builder-leg-actions"><button type="button" class="${locked ? "locked" : ""}" data-builder-lock="${escapeHtml(leg.key)}">${locked ? "Locked" : "Lock"}</button><button type="button" data-builder-replace="${escapeHtml(leg.key)}">Replace</button></div></article>`;
+}
+
+function runParlayBuilder() {
+  els.builderGenerate.classList.add("building");
+  els.builderGenerate.disabled = true;
+  els.builderStatus.textContent = "Checking matchup alignment, samples, stability, and correlation…";
+  setTimeout(() => {
+    const result = selectParlayLegs();
+    state.builderResult = result.selected;
+    els.builderGenerate.classList.remove("building");
+    els.builderGenerate.disabled = false;
+    renderBuilderResult(result.qualified);
+  }, 620);
+}
+
+function wireParlayBuilder() {
+  els.builderLegButtons.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {
+    state.builderLegs = Number(button.dataset.legs);
+    els.builderLegButtons.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === button));
+    state.builderLocked.clear(); state.builderResult = [];
+  }));
+  els.builderModeButtons.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {
+    state.builderMode = button.dataset.mode;
+    els.builderModeButtons.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === button));
+    state.builderLocked.clear(); state.builderResult = [];
+  }));
+  els.builderGenerate.addEventListener("click", async () => {
+    if (!state.v2BoardLoaded) await loadV2Board();
+    runParlayBuilder();
   });
 }
 

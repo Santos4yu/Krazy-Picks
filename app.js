@@ -641,7 +641,9 @@ async function loadSpecialMarkets(force = false) {
 function renderSpecialMarkets() {
   const data = state.specialsData || {};
   const nrfis = data.nrfi || [];
-  renderMoneylineResearch(data.moneyline_research || data.moneylines || []);
+  // Moneyline v5 is intentionally hidden until the production model feed is ready.
+  document.getElementById("moneyline-research").hidden = true;
+  els.moneylineEmpty.hidden = true;
   els.nrfiList.innerHTML = nrfis.map((p) => `<article class="market-card"><div class="market-card-top"><span class="market-badge ${p.confidence === "LEAN" ? "lean" : ""}">${escapeHtml(p.confidence || "READY")}</span><span class="market-sport">FIRST INNING</span></div><strong>${escapeHtml(p.recommendation || "—")} <em>${escapeHtml(p.away_abbr || "?")} @ ${escapeHtml(p.home_abbr || "?")}</em></strong><p class="market-matchup">${escapeHtml(p.home_pitcher || "TBD")} vs ${escapeHtml(p.away_pitcher || "TBD")}</p><div class="market-confirmed"><span>LINEUPS</span><b>Confirmed</b><span>MODEL</span><b>${escapeHtml(String(p.model_rating || p.confidence_pct || "—"))}/100</b></div></article>`).join("");
   els.nrfiEmpty.hidden = nrfis.length > 0;
 }

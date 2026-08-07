@@ -1717,6 +1717,7 @@ body::before {
 }
 .split-callout:first-of-type, .matchup-opp { margin-top: 0; }
 .matchup-score-card { margin: 0 0 14px; padding: 14px; border: 1px solid rgba(255,255,255,.09); border-radius: 14px; background: rgba(8,14,32,.58); }
+.matchup-report-block { width:min(100%,720px); aspect-ratio:3 / 4; margin-left:auto; margin-right:auto; }
 .matchup-score-head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
 .matchup-score-head span { display:block; color:var(--text); font-size:13px; font-weight:800; }
 .matchup-score-head small { display:block; margin-top:3px; color:var(--text-dim); font-size:10px; }

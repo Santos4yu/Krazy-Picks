@@ -1093,15 +1093,22 @@ def _matchup_score_100(splits, side="over", pitcher=None, bvp=None,
     delta = hand_ops - other_ops if other_ops > 0 else 0.0
     detail = f"{hand_ops:.3f} OPS vs {ph}HP ({hand_pa} PA)"
     if hand_ok and other_ops > 0: detail += f" · {delta:+.3f} vs opposite split"
-    add("handedness", sided(50 + (hand_ops - .720) * 125 + delta * 100),
+    add("handedness", sided(50 + (hand_ops - .720) * 160 + delta * 100),
         detail if hand_ok else "Split unavailable", hand_ok, min(1.0, hand_pa / 100) ** .6 if hand_ok else 0)
 
-    try: era, fip = float(pitcher.get("era") or 0), float(pitcher.get("fip") or 0)
-    except (TypeError, ValueError): era = fip = 0.0
+    try:
+        era, fip = float(pitcher.get("era") or 0), float(pitcher.get("fip") or 0)
+        whip, hr9 = float(pitcher.get("whip") or 0), float(pitcher.get("hr_per_9") or 0)
+    except (TypeError, ValueError): era = fip = whip = hr9 = 0.0
     pq_ok = era > 0 or fip > 0
     blended = era * .6 + fip * .4 if era and fip else era or fip
-    add("pitcher_quality", sided(50 + (blended - 4.10) * 12.5),
-        (f"{era:.2f} ERA / {fip:.2f} FIP" if fip else f"{blended:.2f} ERA") if pq_ok else "Starter metrics unavailable", pq_ok)
+    pitcher_raw = 50 + (blended - 4.10) * 15
+    if whip > 0: pitcher_raw += (whip - 1.28) * 15
+    if hr9 > 0: pitcher_raw += (hr9 - 1.15) * 4
+    pitcher_detail = (f"{era:.2f} ERA / {fip:.2f} FIP" if fip else f"{blended:.2f} ERA")
+    if whip > 0: pitcher_detail += f" · {whip:.2f} WHIP"
+    if hr9 > 0: pitcher_detail += f" · {hr9:.2f} HR/9"
+    add("pitcher_quality", sided(pitcher_raw), pitcher_detail if pq_ok else "Starter metrics unavailable", pq_ok)
 
     pitch_rows = {r.get("pitch_type"): r for r in (bat_vs_pitch or [])}
     weighted = coverage = 0.0
@@ -1132,8 +1139,16 @@ def _matchup_score_100(splits, side="over", pitcher=None, bvp=None,
         item = (splits or {}).get(key) or {}; rate = item.get("rate")
         if rate is not None and item.get("games", 0):
             parts.append(((100 - rate) if is_under else rate) * weight); form_weights.append(weight)
-    form_ok = bool(form_weights); form_score = sum(parts) / sum(form_weights) if form_ok else 50
-    add("recent_form", form_score, f"Weighted recent hit rate {form_score:.0f}%" if form_ok else "Recent sample unavailable", form_ok)
+    batting_form = (splits or {}).get("recent_batting_form") or {}
+    if batting_form.get("delta_pct") is not None:
+        delta_pct = float(batting_form["delta_pct"])
+        form_score = sided(50 + delta_pct * 1.6)
+        form_ok = True
+        form_detail = f"L10 OPS {delta_pct:+.1f}% vs season ({batting_form.get('l10_ops'):.3f} vs {batting_form.get('season_ops'):.3f})"
+    else:
+        form_ok = bool(form_weights); form_score = sum(parts) / sum(form_weights) if form_ok else 50
+        form_detail = f"Weighted recent hit rate {form_score:.0f}%" if form_ok else "Recent sample unavailable"
+    add("recent_form", form_score, form_detail, form_ok)
 
     try: pf = float(park_factor or 1.0)
     except (TypeError, ValueError): pf = 1.0
@@ -1149,7 +1164,7 @@ def _matchup_score_100(splits, side="over", pitcher=None, bvp=None,
         weather_detail = f"{weather.get('temp_f', '—')}°F, {speed:.0f} mph wind"
     add("weather", sided(weather_over), weather_detail, weather_ok)
 
-    score = max(0, min(100, round(50 + sum(f["impact"] for f in factors) * .5)))
+    score = max(0, min(100, round(50 + sum(f["impact"] for f in factors))))
     data_coverage = sum(f["weight"] for f in factors if f["available"]) / 100
     label = "Favorable" if score >= 67 else ("Unfavorable" if score <= 33 else "Neutral")
     return {"score": score, "label": label, "coverage": round(data_coverage, 2), "factors": factors}

@@ -3948,6 +3948,24 @@ body::before,body::after{display:none}.grid-bg,.vortex-swirl,.glow-orb{display:n
 
 /* Compact game-side research: the picker is a rail, the report is the product. */
 .moneyline-research { max-width:1050px; margin:0 auto; }
+.ml-v5-score { margin:0 0 18px; padding:18px; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(7,13,29,.72); }
+.ml-v5-head { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.ml-v5-head span { display:block; font-size:12px; font-weight:900; letter-spacing:.08em; }
+.ml-v5-head small { display:block; margin-top:4px; color:var(--text-dim); font-size:10px; }
+.ml-v5-head>strong { color:#f5df4d; font-size:27px; letter-spacing:-1px; }
+.ml-v5-score[data-tone="favorable"] .ml-v5-head>strong { color:#22ddb2; }
+.ml-v5-score[data-tone="unfavorable"] .ml-v5-head>strong { color:#ff3f9c; }
+.ml-v5-track { height:7px; margin:14px 0; overflow:hidden; border-radius:99px; background:rgba(255,255,255,.08); }
+.ml-v5-track i { display:block; height:100%; border-radius:inherit; background:#f5df4d; }
+.ml-v5-score[data-tone="favorable"] .ml-v5-track i { background:#22ddb2; }
+.ml-v5-score[data-tone="unfavorable"] .ml-v5-track i { background:#ff3f9c; }
+.ml-v5-projection { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:10px; }
+.ml-v5-projection span { padding:9px; border-radius:9px; background:rgba(255,255,255,.035); color:var(--text-dim); font-size:10px; }
+.ml-v5-projection b { display:block; margin-top:3px; color:var(--text); font-size:14px; }
+.ml-weight-row { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; padding:9px 0; border-top:1px solid rgba(255,255,255,.06); }
+.ml-weight-row b,.ml-weight-row small { display:block; }
+.ml-weight-row b { font-size:10px; }.ml-weight-row small { margin-top:3px; color:var(--text-dim); font-size:9px; }.ml-weight-row>strong { font-size:10px; }
+@media (max-width:640px) { .ml-v5-projection { grid-template-columns:1fr; } }
 .moneyline-coming-soon {
   width:min(760px,100%);
   min-height:430px;

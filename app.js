@@ -2552,8 +2552,9 @@ function fillMatchup(node, p) {
   const scoreCard = node.querySelector(".matchup-score-card");
   const score = Number(p.matchupScore);
   if (scoreCard && Number.isFinite(score)) {
-    const label = p.matchupLabel || (score >= 67 ? "Favorable" : score <= 33 ? "Unfavorable" : "Neutral");
-    const tone = label.toLowerCase();
+    const fallbackLabel = score >= 85 ? "Elite Matchup" : score >= 75 ? "Strong Matchup" : score >= 65 ? "Favorable" : score >= 55 ? "Slight Edge" : score >= 45 ? "Neutral" : score >= 35 ? "Caution" : "Unfavorable";
+    const label = p.matchupLabel || fallbackLabel;
+    const tone = score >= 85 ? "elite" : score >= 75 ? "strong" : score >= 65 ? "favorable" : score >= 55 ? "slight" : score >= 45 ? "neutral" : score >= 35 ? "caution" : "unfavorable";
     scoreCard.hidden = false;
     scoreCard.dataset.tone = tone;
     scoreCard.querySelector(".matchup-score-value").textContent = `${Math.round(score)}/100`;

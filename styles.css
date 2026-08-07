@@ -1722,11 +1722,22 @@ body::before {
 .matchup-score-head small { display:block; margin-top:3px; color:var(--text-dim); font-size:10px; }
 .matchup-score-value { color:#f5df4d; font-size:22px; letter-spacing:-.5px; }
 .matchup-score-card[data-tone="favorable"] .matchup-score-value { color:#22ddb2; }
+.matchup-score-card[data-tone="strong"] .matchup-score-value,
+.matchup-score-card[data-tone="elite"] .matchup-score-value { color:#19ef9f; }
+.matchup-score-card[data-tone="slight"] .matchup-score-value { color:#f5df4d; }
+.matchup-score-card[data-tone="caution"] .matchup-score-value { color:#ff9b43; }
 .matchup-score-card[data-tone="unfavorable"] .matchup-score-value { color:#ff3f9c; }
 .matchup-score-track { height:6px; margin:11px 0 9px; overflow:hidden; border-radius:99px; background:rgba(255,255,255,.08); }
 .matchup-score-fill { display:block; width:0; height:100%; border-radius:inherit; background:#f5df4d; transition:width .45s ease; }
 .matchup-score-card[data-tone="favorable"] .matchup-score-fill { background:#22ddb2; }
+.matchup-score-card[data-tone="strong"] .matchup-score-fill,
+.matchup-score-card[data-tone="elite"] .matchup-score-fill { background:#19ef9f; }
+.matchup-score-card[data-tone="caution"] .matchup-score-fill { background:#ff9b43; }
 .matchup-score-card[data-tone="unfavorable"] .matchup-score-fill { background:#ff3f9c; }
+.matchup-score-scale { display:grid; grid-template-columns:35fr 10fr 10fr 10fr 10fr 10fr 15fr; margin:-4px 0 10px; color:var(--text-dim); font-size:8px; text-transform:uppercase; letter-spacing:.04em; }
+.matchup-score-scale span:nth-child(n+2) { text-align:center; }
+.matchup-score-scale span:last-child { text-align:right; }
+.matchup-score-note { margin:0 0 10px; padding:8px 10px; border-radius:8px; background:rgba(255,255,255,.035); color:var(--text-dim); font-size:9px; line-height:1.4; }
 .matchup-score-factors { display:grid; gap:7px; }
 .matchup-factor { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding-top:7px; border-top:1px solid rgba(255,255,255,.06); }
 .matchup-factor div { min-width:0; }

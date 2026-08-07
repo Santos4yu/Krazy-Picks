@@ -633,6 +633,8 @@ function renderSpecialMarkets() {
 }
 
 function moneylineValue(value, fallback = "—") { return value === null || value === undefined || value === "" ? fallback : escapeHtml(String(value)); }
+function moneylineDecimal(value, digits = 2, fallback = "—") { const number = Number(value); return Number.isFinite(number) ? number.toFixed(digits) : fallback; }
+function moneylineGameTime(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "Game time TBD" : date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
 
 function renderMoneylineResearch(games) {
   const shell = document.getElementById("moneyline-research"), picker = document.getElementById("moneyline-game-picker"), report = document.getElementById("moneyline-report");
@@ -641,27 +643,30 @@ function renderMoneylineResearch(games) {
   els.moneylineEmpty.hidden = true;
   if (!games.some((game) => String(game.game_pk) === String(state.moneylineGamePk))) state.moneylineGamePk = games[0].game_pk;
   const game = games.find((item) => String(item.game_pk) === String(state.moneylineGamePk)) || games[0];
+  const isV5 = String(game.model_version || "").startsWith("v5-") && Number.isFinite(Number(game.moneyline_score));
   const selected = state.moneylineSide === "away" ? "away" : "home", other = selected === "home" ? "away" : "home";
   const team = game[`${selected}_team`] || (selected === "home" ? game.rec_team : game.opponent), opponent = game[`${other}_team`] || (selected === "home" ? game.opponent : game.rec_team);
-  const model = Number(game[`${selected}_pct`]), market = Number(game[`${selected}_market_prob`]), edge = Number.isFinite(model) && Number.isFinite(market) ? model - market : null;
+  const model = isV5 ? Number(game[`${selected}_pct`]) : NaN, market = Number(game[`${selected}_market_prob`]), edge = Number.isFinite(model) && Number.isFinite(market) ? model - market : null;
   const pitcher = game[`${selected}_pitcher`] || "TBD", oppPitcher = game[`${other}_pitcher`] || "TBD", offense = game[`${selected}_offense`] || {}, bullpen = game[`${selected}_bullpen`] || {};
-  const isModelSide = game.rec_is_home === (selected === "home"), readiness = game.lineups_confirmed ? "Lineups confirmed" : "Pre-lineup read";
+  const isModelSide = game.rec_is_home === (selected === "home"), readiness = !isV5 ? "V5 refresh required" : game.lineups_confirmed ? "Lineups confirmed" : "Pre-lineup read";
   const factorScores = game.factor_scores || {}, factorDirection = isModelSide ? 1 : -1;
   const signed = (key) => { if (!Object.prototype.hasOwnProperty.call(factorScores, key)) return "—"; const n = Number(factorScores[key]) * factorDirection; return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`; };
   const weather = game.weather || {};
   const tier = String(game.tier || "PASS").toUpperCase();
-  const actionable = game.lineups_confirmed && (tier === "LEAN" || tier === "STRONG");
-  const noBetReason = !game.lineups_confirmed
+  const actionable = isV5 && game.lineups_confirmed && (tier === "LEAN" || tier === "STRONG");
+  const noBetReason = !isV5
+    ? "The website is waiting for a fresh v5 expected-runs snapshot from the Vortex bot. Older model data is not presented as a current pick."
+    : !game.lineups_confirmed
     ? "Awaiting confirmed lineups and reliable starters. This is research, not a pick."
     : game.volatility === "HIGH"
       ? "No bet — game volatility is too high for a reliable moneyline call."
       : "No bet — the model has not found a qualified, actionable edge.";
   const weatherText = typeof weather === "string" ? weather : (weather.dome ? "Indoor / roof context" : [weather.temperature, weather.speed_mph ? `${weather.speed_mph} mph wind` : ""].filter(Boolean).join(" · ") || "Weather pending");
   picker.innerHTML = games.map((item) => `<button class="ml-game-choice ${String(item.game_pk) === String(game.game_pk) ? "active" : ""}" data-ml-game="${escapeHtml(String(item.game_pk))}"><span>${escapeHtml(item.away_abbr || item.away_team || "AWY")} @ ${escapeHtml(item.home_abbr || item.home_team || "HME")}</span><small>${item.lineups_confirmed ? "confirmed" : "pre-game"}</small></button>`).join("");
-  report.innerHTML = `<div class="ml-matchup-head"><div><p class="eyebrow">${readiness.toUpperCase()}</p><h3>${escapeHtml(team)} <span>vs ${escapeHtml(opponent)}</span></h3><p>${escapeHtml(pitcher)} vs ${escapeHtml(oppPitcher)} · ${moneylineValue(game.commence_time, "Game time TBD")}</p></div><div class="ml-side-toggle" role="group" aria-label="Team to research"><button class="${selected === "away" ? "active" : ""}" data-ml-side="away">${escapeHtml(game.away_abbr || "Away")}</button><button class="${selected === "home" ? "active" : ""}" data-ml-side="home">${escapeHtml(game.home_abbr || "Home")}</button></div></div><div class="ml-score-row"><div class="ml-score"><span>KRAZY PICKS WIN</span><strong>${Number.isFinite(model) ? model.toFixed(1) : "—"}%</strong><small>${isModelSide ? "model-selected side" : "your selected side"}</small></div><div class="ml-score"><span>MARKET</span><strong>${Number.isFinite(market) ? market.toFixed(1) : "—"}%</strong><small>${moneylineValue(game[`${selected}_odds`], "—")} odds</small></div><div class="ml-score ${edge !== null && edge >= 0 ? "positive" : ""}"><span>PRICING GAP</span><strong>${edge === null ? "—" : `${edge >= 0 ? "+" : ""}${edge.toFixed(1)}%`}</strong><small>${edge !== null && edge >= 0 ? "model above price" : "market above model"}</small></div></div><div class="ml-evidence"><article><span>STARTER</span><strong>${escapeHtml(pitcher)}</strong><p>FIP ${moneylineValue(game[`${selected}_fip`])} · opponent: ${escapeHtml(oppPitcher)}</p></article><article><span>TEAM FORM</span><strong>${moneylineValue(game[`${selected}_record`])}</strong><p>${moneylineValue(offense.wrc_plus || offense.wrc)} wRC+ · ${moneylineValue(offense.iso)} ISO · ${moneylineValue(offense.bb_pct)}% BB</p></article><article><span>BULLPEN</span><strong>${moneylineValue(bullpen.era)} ERA</strong><p>${moneylineValue(bullpen.fatigued_count, "0")} fatigued arms · late-game context</p></article><article><span>CONTEXT</span><strong>${moneylineValue(game.park_factor)} park factor</strong><p>${escapeHtml(game.weather || "Weather not available")}</p></article></div><div class="ml-verdict"><span>${edge !== null && edge >= 0 ? "KRAZY PICKS LEAN" : "CAUTION"}</span><p>${escapeHtml(game.insight || "The model is weighing starters, team quality, bullpen condition, market price, park and game context.")}</p></div>`;
-  const baseScore = Number(game.moneyline_score);
+  report.innerHTML = `<div class="ml-matchup-head"><div><p class="eyebrow">${readiness.toUpperCase()}</p><h3>${escapeHtml(team)} <span>vs ${escapeHtml(opponent)}</span></h3><p>${escapeHtml(pitcher)} vs ${escapeHtml(oppPitcher)} · ${moneylineGameTime(game.commence_time)}</p></div><div class="ml-side-toggle" role="group" aria-label="Team to research"><button class="${selected === "away" ? "active" : ""}" data-ml-side="away">${escapeHtml(game.away_abbr || "Away")}</button><button class="${selected === "home" ? "active" : ""}" data-ml-side="home">${escapeHtml(game.home_abbr || "Home")}</button></div></div><div class="ml-score-row"><div class="ml-score"><span>KRAZY PICKS WIN</span><strong>${Number.isFinite(model) ? `${model.toFixed(1)}%` : "—"}</strong><small>${isV5 ? (isModelSide ? "model-selected side" : "your selected side") : "awaiting v5 refresh"}</small></div><div class="ml-score"><span>MARKET</span><strong>${Number.isFinite(market) ? market.toFixed(1) : "—"}%</strong><small>${moneylineValue(game[`${selected}_odds`], "—")} odds</small></div><div class="ml-score ${edge !== null && edge >= 0 ? "positive" : ""}"><span>PRICING GAP</span><strong>${edge === null ? "—" : `${edge >= 0 ? "+" : ""}${edge.toFixed(1)}%`}</strong><small>${edge !== null && edge >= 0 ? "model above price" : "awaiting current model"}</small></div></div><div class="ml-evidence"><article><span>STARTER</span><strong>${escapeHtml(pitcher)}</strong><p>FIP ${moneylineDecimal(game[`${selected}_fip`])} · opponent: ${escapeHtml(oppPitcher)}</p></article><article><span>TEAM FORM</span><strong>${moneylineValue(game[`${selected}_record`])}</strong><p>${moneylineValue(offense.wrc_plus || offense.wrc)} wRC+ · ${moneylineValue(offense.iso)} ISO · ${moneylineValue(offense.bb_pct)}% BB</p></article><article><span>BULLPEN</span><strong>${moneylineDecimal(bullpen.era)} ERA</strong><p>${moneylineValue(bullpen.fatigued_count, "0")} fatigued arms · late-game context</p></article><article><span>CONTEXT</span><strong>${moneylineDecimal(game.park_factor)} park factor</strong><p>${escapeHtml(game.weather || "Weather not available")}</p></article></div><div class="ml-verdict"><span>${edge !== null && edge >= 0 ? "KRAZY PICKS LEAN" : "CAUTION"}</span><p>${escapeHtml(game.insight || "The model is weighing starters, team quality, bullpen condition, market price, park and game context.")}</p></div>`;
+  const baseScore = isV5 ? Number(game.moneyline_score) : NaN;
   const shownScore = Number.isFinite(baseScore) ? (isModelSide ? baseScore : 100 - baseScore) : null;
-  const scoreLabel = shownScore === null ? "Pending" : shownScore >= 67 ? "Favorable" : shownScore <= 33 ? "Unfavorable" : "Neutral";
+  const scoreLabel = shownScore === null ? (isV5 ? "Pending" : "Refresh required") : shownScore >= 67 ? "Favorable" : shownScore <= 33 ? "Unfavorable" : "Neutral";
   const factorRows = (game.moneyline_factors || []).map((factor) => {
     const impact = Number(factor.impact || 0) * (isModelSide ? 1 : -1);
     return `<div class="ml-weight-row"><div><b>${escapeHtml(factor.name || "Factor")}</b><small>${escapeHtml(factor.detail || "")}</small></div><strong>${impact > 0 ? "+" : ""}${impact} / ${moneylineValue(factor.weight, 0)}</strong></div>`;
@@ -672,7 +677,7 @@ function renderMoneylineResearch(games) {
   report.querySelector(".ml-evidence article:last-child p").textContent = weatherText;
   if (!actionable) {
     const verdict = report.querySelector(".ml-verdict");
-    verdict.querySelector("span").textContent = game.lineups_confirmed ? "NO BET" : "AWAITING LINEUPS";
+    verdict.querySelector("span").textContent = !isV5 ? "V5 REFRESH REQUIRED" : game.lineups_confirmed ? "NO BET" : "AWAITING LINEUPS";
     verdict.querySelector("p").textContent = noBetReason;
     verdict.classList.add("ml-no-bet");
     report.querySelector(".ml-score.positive")?.classList.remove("positive");

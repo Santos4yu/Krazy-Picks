@@ -428,7 +428,7 @@
     <button class="tool-tab" data-tool="weather">Weather + Park <span>Coming soon</span></button>
     <button class="tool-tab" data-tool="platoon">Platoon Matchups <span>Coming soon</span></button>
     <button class="tool-tab" data-tool="bvp">BvP Matchups <span>Coming soon</span></button>
-    <button class="tool-tab" data-tool="strikeouts">Strikeout Spots <span>Coming soon</span></button>
+    <button class="tool-tab" data-tool="strikeouts">Strikeout Spots <span>Live</span></button>
   </div>
   <div class="slate-toolbar">
     <p class="slate-hint" id="slate-date">Today's starting-pitcher matchups, easiest to hardest. Click a matchup to see how the opposing lineup hits vs that pitcher.</p>
@@ -448,12 +448,22 @@
     <button class="ghost-btn" id="v2-refresh-btn">Refresh</button>
   </div>
 
+  <div class="auto-board-status" id="auto-board-status" aria-live="polite">
+    <div><i></i><span>AUTO BOARD</span><strong id="auto-board-state">Connecting…</strong></div>
+    <div><span>Active scan</span><strong id="auto-active-cadence">—</strong></div>
+    <div><span>Pregame scan</span><strong id="auto-pregame-cadence">—</strong></div>
+    <div><span>Daily budget</span><strong id="auto-credit-budget">—</strong></div>
+    <div><span>Monthly reserve</span><strong id="auto-monthly-reserve">—</strong></div>
+  </div>
+
   <div class="board-filter-row" id="board-filter-row" aria-label="Filter props">
     <button type="button" class="active" data-board-filter="all">All</button>
     <button type="button" data-board-filter="hits">Hits</button>
     <button type="button" data-board-filter="total bases">Total Bases</button>
     <button type="button" data-board-filter="strikeout">Strikeouts</button>
     <button type="button" data-board-filter="outs">Pitcher Outs</button>
+    <button type="button" data-board-filter="hits allowed">Hits Allowed</button>
+    <button type="button" data-board-filter="earned runs">Earned Runs</button>
     <button type="button" data-board-filter="ready">Decision-ready</button>
     <button type="button" data-board-filter="matchup">Best Matchups</button>
   </div>

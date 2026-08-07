@@ -108,6 +108,7 @@ const state = {
   slateLoaded: false,
   v2BoardLoaded: false,
   v2BoardData: null,
+  v2RenderedProps: [],
   boardFilter: "all",
   builderLegs: 2,
   builderMode: "safe",
@@ -263,6 +264,11 @@ function cacheEls() {
   els.v2BoardDate = document.getElementById("v2-board-date");
   els.v2RefreshBtn = document.getElementById("v2-refresh-btn");
   els.boardFilterRow = document.getElementById("board-filter-row");
+  els.autoBoardState = document.getElementById("auto-board-state");
+  els.autoActiveCadence = document.getElementById("auto-active-cadence");
+  els.autoPregameCadence = document.getElementById("auto-pregame-cadence");
+  els.autoCreditBudget = document.getElementById("auto-credit-budget");
+  els.autoMonthlyReserve = document.getElementById("auto-monthly-reserve");
   els.builderLegButtons = document.getElementById("builder-leg-buttons");
   els.builderModeButtons = document.getElementById("builder-mode-buttons");
   els.builderSameGame = document.getElementById("builder-same-game");
@@ -2975,6 +2981,14 @@ function wireSlate() {
     tools.forEach((item) => item.classList.toggle("active", item === button));
     const tool = button.dataset.tool;
     els.slateDate.textContent = labels[tool] || labels.attack;
+    if (tool === "strikeouts") {
+      state.boardFilter = "strikeout";
+      const strikeoutFilter = els.boardFilterRow?.querySelector('[data-board-filter="strikeout"]');
+      els.boardFilterRow?.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === strikeoutFilter));
+      switchTab("v2", document.querySelector('.tab-btn[data-tab="v2"]'));
+      loadV2Board(true);
+      return;
+    }
     if (tool !== "attack") {
       els.slateRefreshBtn.hidden = true;
       els.slateList.innerHTML = "";
@@ -3119,7 +3133,7 @@ function wireV2Board() {
     const btn = e.target.closest(".v2-deepdive-btn");
     if (!btn) return;
     e.stopPropagation(); // don't also toggle the row's own open/close
-    const p = (state.v2BoardData?.props || [])[Number(btn.dataset.v2Idx)];
+    const p = (state.v2RenderedProps || [])[Number(btn.dataset.v2Idx)];
     if (!p) return;
     if (btn.textContent.includes("View Details")) {
       openPlayerDetail(p);
@@ -3174,6 +3188,7 @@ const BOT_TIER = {
   LEAN:   { badge: "🔹 LEAN",   cls: "tier-lean" },
   RISKY:  { badge: "⚠️ RISKY",  cls: "tier-risky" },
   FADE:   { badge: "⛔ FADE",   cls: "tier-risky" },
+  RESEARCH: { badge: "👁️ MATCHUP", cls: "tier-research" },
 };
 
 // Rows with no stats-tier (no pitcher match / stats card unavailable) never
@@ -3213,7 +3228,19 @@ function boardMatchupLabel(score) {
 }
 
 function renderBotBoard(data) {
-  const allProps = (data.props || []).map((p, sourceIndex) => ({ ...p, _boardIndex: sourceIndex }))
+  const recommendedProps = data.props || [];
+  const researchPitchers = data.pitcher_research || [];
+  const sourceProps = state.boardFilter === "strikeout"
+    ? [...recommendedProps, ...researchPitchers]
+    : recommendedProps;
+  const seen = new Set();
+  const allProps = sourceProps.map((p, sourceIndex) => ({ ...p, _boardIndex: sourceIndex }))
+    .filter((p) => {
+      const key = [p.player_name, p.stat_type, p.line, p.stats?.side || "over"].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .filter((p) => p.stats && p.stats.player_id);
   let props = allProps.filter((p) => {
     const filter = state.boardFilter;
@@ -3227,9 +3254,21 @@ function renderBotBoard(data) {
       Number(b.stats.matchup_score) - Number(a.stats.matchup_score)
       || Number(b.vortex_score || 0) - Number(a.vortex_score || 0));
   }
+  props = props.map((p, index) => ({ ...p, _boardIndex: index }));
+  state.v2RenderedProps = props;
   els.v2BoardDate.textContent = props.length
     ? `${props.length} prop${props.length === 1 ? "" : "s"} · updated ${data.generated_at ? new Date(data.generated_at).toLocaleString() : "recently"}`
     : "KRAZY PICKS ACTIVE BOARD — data-driven props: filtered, scored, ranked.";
+  const automation = data.automation || {};
+  if (els.autoBoardState) {
+    els.autoBoardState.textContent = automation.enabled ? "Scanning 24/7" : "Status unavailable";
+    els.autoActiveCadence.textContent = automation.active_minutes ? `Every ${automation.active_minutes} min` : "—";
+    els.autoPregameCadence.textContent = automation.pregame_minutes ? `Every ${automation.pregame_minutes} min` : "—";
+    els.autoCreditBudget.textContent = automation.daily_credit_cap
+      ? `${automation.credits_reserved_today || 0} / ${automation.daily_credit_cap}` : "—";
+    els.autoMonthlyReserve.textContent = automation.monthly_credit_reserve
+      ? `${Number(automation.monthly_credit_reserve).toLocaleString()} protected` : "—";
+  }
   els.v2BoardEmpty.textContent =
     "The board is empty right now — it fills as soon as the data engine runs (backend/update_board.py).";
   els.v2BoardList.innerHTML = "";
@@ -3300,7 +3339,7 @@ function renderBotBoard(data) {
           <span class="v2-card-matchup">${matchupLine}${timeStr ? ` · ${timeStr}` : ""}</span>
           <span class="v2-card-prop">${sidePfx} ${p.line} ${escapeHtml(p.stat_type)}</span>
           <span class="v2-card-ev">${escapeHtml(evText)}</span>
-          <span class="v2-card-confidence">KP SCORE ${escapeHtml(String(p.vortex_score ?? "—"))} · ${escapeHtml(stats.splits?.l10?.rate != null ? `${stats.splits.l10.rate}% L10` : "sample pending")}</span>
+          <span class="v2-card-confidence">KP SCORE ${escapeHtml(String(p.vortex_score ?? "—"))} · ${escapeHtml(stats.splits?.l10?.rate != null ? `${stats.side === "under" ? 100 - stats.splits.l10.rate : stats.splits.l10.rate}% L10` : "sample pending")}</span>
           ${matchupBadge}
         </span>
       </span>
@@ -3553,6 +3592,20 @@ function buildBotDetailHtml(p, i) {
       <span class="risk"><b>RISK</b>${escapeHtml(String(p.risk_summary || "No major conflict reported.").slice(0, 120))}</span>
       <span><b>MARKET</b>${stats.market_movement ? escapeHtml(String(stats.market_movement)) : "Movement unavailable — not used in score."}</span>
     </div>`;
+
+  if (Number.isFinite(Number(stats.matchup_score)) && (stats.matchup_factors || []).length) {
+    const factors = stats.matchup_factors.map((factor) => `
+      <div class="k-matchup-factor">
+        <div><strong>${escapeHtml(factor.name || "Factor")}</strong><small>${escapeHtml(factor.detail || "")}</small></div>
+        <span>${escapeHtml(String(factor.score ?? "—"))}<em>W${escapeHtml(String(factor.weight ?? "—"))}</em></span>
+      </div>`).join("");
+    html += `
+      <div class="v2-detail-section k-matchup-breakdown">
+        <div class="v2-detail-title">Strikeout matchup grade</div>
+        <div class="k-matchup-total"><strong>${Math.round(Number(stats.matchup_score))}</strong><span>/100<br>${escapeHtml(boardMatchupLabel(stats.matchup_score))}</span></div>
+        <div class="k-matchup-factors">${factors}</div>
+      </div>`;
+  }
 
   // Hit rates section with emojis
   const hasSplits = ["l5", "l10", "l20"].some((k) => splits[k] && typeof splits[k].rate === "number");

@@ -3184,15 +3184,33 @@ function fmtBotEv(p) {
   return `EV ${ev >= 0 ? "+" : ""}${ev.toFixed(1)}%`;
 }
 
+function boardMatchupLabel(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "";
+  if (n >= 85) return "ELITE MATCHUP";
+  if (n >= 75) return "STRONG MATCHUP";
+  if (n >= 65) return "FAVORABLE";
+  if (n >= 55) return "SLIGHT EDGE";
+  if (n >= 45) return "NEUTRAL";
+  if (n >= 35) return "CAUTION";
+  return "UNFAVORABLE";
+}
+
 function renderBotBoard(data) {
   const allProps = (data.props || []).map((p, sourceIndex) => ({ ...p, _boardIndex: sourceIndex }))
     .filter((p) => p.stats && p.stats.player_id);
-  const props = allProps.filter((p) => {
+  let props = allProps.filter((p) => {
     const filter = state.boardFilter;
     if (filter === "all") return true;
     if (filter === "ready") return ["ELITE", "STRONG"].includes(p.tier);
+    if (filter === "matchup") return Number.isFinite(Number(p.stats?.matchup_score));
     return (p.stat_type || "").toLowerCase().includes(filter);
   });
+  if (state.boardFilter === "matchup") {
+    props = props.sort((a, b) =>
+      Number(b.stats.matchup_score) - Number(a.stats.matchup_score)
+      || Number(b.vortex_score || 0) - Number(a.vortex_score || 0));
+  }
   els.v2BoardDate.textContent = props.length
     ? `${props.length} prop${props.length === 1 ? "" : "s"} · updated ${data.generated_at ? new Date(data.generated_at).toLocaleString() : "recently"}`
     : "KRAZY PICKS ACTIVE BOARD — data-driven props: filtered, scored, ranked.";
@@ -3216,6 +3234,10 @@ function renderBotBoard(data) {
     row.setAttribute("aria-expanded", "false");
 
     const stats = p.stats || {};
+    const matchupScore = Number(stats.matchup_score);
+    const matchupBadge = Number.isFinite(matchupScore)
+      ? `<span class="v2-card-matchup-score" data-band="${matchupScore >= 75 ? "strong" : matchupScore >= 65 ? "favorable" : matchupScore >= 55 ? "slight" : matchupScore >= 45 ? "neutral" : matchupScore >= 35 ? "caution" : "unfavorable"}">MATCHUP ${Math.round(matchupScore)} · ${boardMatchupLabel(matchupScore)}</span>`
+      : "";
     const sidePfx = stats.side === "under" ? "U" : "O";
     const tier = BOT_TIER[p.tier] || botScoreBadge(p.vortex_score);
     const sportTag = `${SPORT_EMOJI[p.sport] || "🎯"} ${p.sport || ""}`;
@@ -3263,6 +3285,7 @@ function renderBotBoard(data) {
           <span class="v2-card-prop">${sidePfx} ${p.line} ${escapeHtml(p.stat_type)}</span>
           <span class="v2-card-ev">${escapeHtml(evText)}</span>
           <span class="v2-card-confidence">KP SCORE ${escapeHtml(String(p.vortex_score ?? "—"))} · ${escapeHtml(stats.splits?.l10?.rate != null ? `${stats.splits.l10.rate}% L10` : "sample pending")}</span>
+          ${matchupBadge}
         </span>
       </span>
       <span class="v2-chevron" aria-hidden="true">▾</span>

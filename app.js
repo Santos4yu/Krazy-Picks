@@ -3459,12 +3459,24 @@ function parlayCandidate(p, modeName) {
   const stability = String(stats.stability_tier || "").toUpperCase();
   const conflicts = stats.matchup_conflicts || [];
   const pitcherMarket = /strikeout|outs|hits allowed|earned runs/i.test(p.stat_type || "");
+  const pitcherName = String(stats.pitcher?.name || "").trim();
+  const opponent = String(stats.opponent || stats.matchup?.opponent || "").trim();
+  const bvp = stats.bvp || {};
+  const bvpAb = Number(bvp.ab || 0);
+  const bvpHits = Number(bvp.hits || 0);
+  const rawBvpAvg = String(bvp.avg ?? "").trim();
+  const bvpAvg = rawBvpAvg ? Number(rawBvpAvg.startsWith(".") ? `0${rawBvpAvg}` : rawBvpAvg) : (bvpAb ? bvpHits / bvpAb : NaN);
+  const isUnder = stats.side === "under";
+  const bvpConflict = !pitcherMarket && bvpAb >= 8 && Number.isFinite(bvpAvg)
+    && ((!isUnder && bvpAvg <= .150) || (isUnder && bvpAvg >= .350));
   const confirmed = pitcherMarket
     ? Boolean(stats.player_id && (stats.pitcher?.validated_role || stats.pitcher?.games_started || stats.pitcher?.era))
     : Number.isFinite(Number(stats.lineup_spot ?? stats.lineup_pos));
   const reasons = [];
   if (!["ELITE", "STRONG"].includes(String(p.tier || "").toUpperCase())) reasons.push("tier below Strong");
   if (!Number.isFinite(matchup) || matchup < mode.minMatchup) reasons.push(`matchup below ${mode.minMatchup}`);
+  if (!opponent) reasons.push("opponent not resolved");
+  if (!pitcherMarket && (!pitcherName || pitcherName.toUpperCase() === "TBD")) reasons.push("starting pitcher not resolved");
   if (!Number.isFinite(coverage) || coverage < mode.minCoverage) reasons.push("thin matchup coverage");
   if (!Number.isFinite(l10) || l10 < mode.minL10) reasons.push(`L10 below ${mode.minL10}%`);
   if (Number.isFinite(l20) && l20 < mode.minL20) reasons.push("L20 does not support the side");
@@ -3472,20 +3484,27 @@ function parlayCandidate(p, modeName) {
   if (modeName === "safe" && ["LOW", "VOLATILE"].includes(stability)) reasons.push("unstable recent values");
   if (!confirmed) reasons.push(pitcherMarket ? "starter role not confirmed" : "lineup spot not confirmed");
   if (conflicts.length) reasons.push("matchup contradiction");
+  if (bvpConflict) reasons.push(`${bvpHits}-for-${bvpAb} BvP conflicts with the ${isUnder ? "Under" : "Over"}`);
   if (Number(stats.matchup_adjustment) < 0) reasons.push("matchup grades against the pick");
+  if (stats.decision_quality && stats.decision_quality.eligible === false) reasons.push("decision-quality gate failed");
+  if (modeName === "safe" && !pitcherMarket && stats.lineup_confirmed !== true) reasons.push("lineup not confirmed");
   if (reasons.length) return { valid: false, reasons };
 
   const stabilityScore = stability === "HIGH" ? 92 : stability === "MEDIUM" ? 76 : stability === "LOW" ? 52 : 65;
   const projectionScore = Number.isFinite(edge) ? Math.max(35, Math.min(100, 55 + edge * 22)) : 45;
   const longRate = Number.isFinite(l20) ? l20 : l10;
-  const quality = .30 * l10 + .20 * matchup + .15 * coverage * 100 + .15 * projectionScore + .10 * stabilityScore + .10 * longRate;
+  const bvpBonus = bvpAb >= 8 && Number.isFinite(bvpAvg)
+    ? Math.max(-6, Math.min(6, (isUnder ? .250 - bvpAvg : bvpAvg - .250) * 30)) : 0;
+  const quality = .30 * l10 + .20 * matchup + .15 * coverage * 100 + .15 * projectionScore + .10 * stabilityScore + .10 * longRate + bvpBonus;
   const reliability = Math.max(.45, Math.min(.95, coverage * (stabilityScore / 100) * (Number.isFinite(l20) ? 1 : .86)));
-  const adjustedProb = Math.max(.50, Math.min(.86, 50 + (l10 - 50) * reliability)) / 100;
+  const adjustedProb = Math.max(.50, Math.min(.86, (50 + (l10 - 50) * reliability) / 100));
   return {
     valid: true, prop: p, key: builderKey(p), quality: Math.round(quality), adjustedProb,
     matchup, coverage, l10, l20, edge, stability: stability || "UNKNOWN", pitcherMarket,
     gameKey: String(stats.game_pk || `${stats.opponent || "unknown"}|${p.commence_time || "time-pending"}`),
     teamKey: stats.is_home ? "home" : "away",
+    pitcherName, opponent,
+    bvpSummary: bvpAb >= 4 ? `${bvpHits}-for-${bvpAb} vs ${pitcherName}` : "No meaningful BvP sample",
   };
 }
 
@@ -3509,12 +3528,27 @@ function builderCompatible(candidate, selected, allowSameGame, modeName) {
 function selectParlayLegs(excludeKey = "") {
   const candidates = rankedParlayCandidates(state.builderMode);
   const locked = state.builderResult.filter((leg) => state.builderLocked.has(leg.key) && leg.key !== excludeKey);
-  const selected = [...locked];
-  for (const candidate of candidates) {
-    if (candidate.key === excludeKey || selected.length >= state.builderLegs) continue;
-    if (builderCompatible(candidate, selected, els.builderSameGame.checked, state.builderMode)) selected.push(candidate);
-  }
-  return { selected, qualified: candidates.length };
+  const pool = candidates.filter((candidate) => candidate.key !== excludeKey && !locked.some((leg) => leg.key === candidate.key)).slice(0, 24);
+  let best = locked.length <= state.builderLegs ? [...locked] : [];
+  let bestScore = -Infinity;
+  const scoreBuild = (legs) => legs.reduce((sum, leg) => sum + leg.quality + Math.log(leg.adjustedProb) * 8, 0);
+  const search = (start, selected) => {
+    if (selected.length === state.builderLegs) {
+      const score = scoreBuild(selected);
+      if (score > bestScore) { bestScore = score; best = [...selected]; }
+      return;
+    }
+    if (selected.length + (pool.length - start) < state.builderLegs) return;
+    for (let i = start; i < pool.length; i += 1) {
+      const candidate = pool[i];
+      if (!builderCompatible(candidate, selected, els.builderSameGame.checked, state.builderMode)) continue;
+      selected.push(candidate);
+      search(i + 1, selected);
+      selected.pop();
+    }
+  };
+  search(0, [...locked]);
+  return { selected: best, qualified: candidates.length };
 }
 
 function builderCombinedProbability(legs) {
@@ -3571,7 +3605,7 @@ function builderLegHtml(leg, index) {
   const p = leg.prop, stats = p.stats || {}, locked = state.builderLocked.has(leg.key);
   const side = stats.side === "under" ? "Under" : "Over";
   const photo = `https://img.mlbstatic.com/mlb-photos/image/upload/w_120,q_auto:best/v1/people/${stats.player_id}/headshot/silo/current`;
-  return `<article class="builder-leg" style="--leg-delay:${index * 80}ms"><div class="builder-leg-rank">${index + 1}</div><img src="${photo}" alt="" loading="lazy" /><div class="builder-leg-main"><div><h3>${escapeHtml(p.player_name)}</h3><span class="builder-anchor">${leg.quality >= 80 ? "ANCHOR" : leg.quality >= 70 ? "CORE" : "SUPPORTING"}</span></div><strong>${side} ${escapeHtml(String(p.line))} ${escapeHtml(p.stat_type)}</strong><p><span>Matchup ${Math.round(leg.matchup)}</span><span>L10 ${Math.round(leg.l10)}%</span><span>L20 ${Number.isFinite(leg.l20) ? `${Math.round(leg.l20)}%` : "—"}</span><span>Edge ${Number.isFinite(leg.edge) ? `${leg.edge >= 0 ? "+" : ""}${leg.edge.toFixed(2)}` : "—"}</span></p><small>${escapeHtml(stats.opponent ? `${stats.is_home ? "vs" : "@"} ${stats.opponent}` : "Matchup pending")} · ${leg.stability.toLowerCase()} stability · ${Math.round(leg.coverage * 100)}% coverage</small></div><div class="builder-leg-score"><span>LEG SCORE</span><b>${leg.quality}</b><small>${(leg.adjustedProb * 100).toFixed(1)}% adj.</small></div><div class="builder-leg-actions"><button type="button" class="${locked ? "locked" : ""}" data-builder-lock="${escapeHtml(leg.key)}">${locked ? "Locked" : "Lock"}</button><button type="button" data-builder-replace="${escapeHtml(leg.key)}">Replace</button></div></article>`;
+  return `<article class="builder-leg" style="--leg-delay:${index * 80}ms"><div class="builder-leg-rank">${index + 1}</div><img src="${photo}" alt="" loading="lazy" /><div class="builder-leg-main"><div><h3>${escapeHtml(p.player_name)}</h3><span class="builder-anchor">${leg.quality >= 80 ? "ANCHOR" : leg.quality >= 70 ? "CORE" : "SUPPORTING"}</span></div><strong>${side} ${escapeHtml(String(p.line))} ${escapeHtml(p.stat_type)}</strong><p><span>Matchup ${Math.round(leg.matchup)}</span><span>L10 ${Math.round(leg.l10)}%</span><span>L20 ${Number.isFinite(leg.l20) ? `${Math.round(leg.l20)}%` : "—"}</span><span>Edge ${Number.isFinite(leg.edge) ? `${leg.edge >= 0 ? "+" : ""}${leg.edge.toFixed(2)}` : "—"}</span></p><small>${escapeHtml(`${stats.is_home ? "vs" : "@"} ${leg.opponent} · ${leg.pitcherName || "starter verified"} · ${leg.bvpSummary}`)} · ${leg.stability.toLowerCase()} stability · ${Math.round(leg.coverage * 100)}% coverage</small></div><div class="builder-leg-score"><span>LEG SCORE</span><b>${leg.quality}</b><small>${(leg.adjustedProb * 100).toFixed(1)}% adj.</small></div><div class="builder-leg-actions"><button type="button" class="${locked ? "locked" : ""}" data-builder-lock="${escapeHtml(leg.key)}">${locked ? "Locked" : "Lock"}</button><button type="button" data-builder-replace="${escapeHtml(leg.key)}">Replace</button></div></article>`;
 }
 
 function runParlayBuilder() {

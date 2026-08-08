@@ -121,6 +121,7 @@ const state = {
   adminRecords: null,
   adminRecordTab: "props",
   adminUnlocked: false,
+  adminLiveTimer: null,
 };
 
 const els = {};
@@ -765,6 +766,11 @@ async function loadAdminRecords() {
   if (!res.ok) throw new Error("Admin reporting is still locked.");
   const data = await res.json(); state.adminRecords = data.records || {}; state.adminUnlocked = true;
   els.adminResultTabs.hidden = false; els.adminResultsList.hidden = false; renderAdminRecords();
+  if (!state.adminLiveTimer) {
+    state.adminLiveTimer = window.setInterval(() => {
+      if (state.currentTab === "admin" && state.adminUnlocked && !document.hidden) loadAdminRecords().catch(() => {});
+    }, 45000);
+  }
 }
 
 function renderAdminRecords() {
@@ -773,6 +779,10 @@ function renderAdminRecords() {
   const wins = settled.filter((r) => r.result === "hit").length;
   const rate = settled.length ? `${Math.round((wins / settled.length) * 100)}%` : "—";
   const summary = `<div class="record-summary"><span><b>${wins}-${Math.max(0, settled.length - wins)}</b>record</span><span><b>${rate}</b>hit rate</span><span><b>${settled.length}</b>settled</span></div>`;
+  if (state.adminRecordTab === "props" && rows.length) {
+    els.adminResultsList.innerHTML = summary + renderLivePropRecords(rows);
+    return;
+  }
   els.adminResultsList.innerHTML = rows.length ? summary + rows.map((r) => {
     const hit = r.result === "hit"; const label = state.adminRecordTab === "props" ? `${r.player_name} · ${r.side} ${r.line} ${r.stat_type}` : state.adminRecordTab === "moneyline" ? `${r.rec_team} vs ${r.opponent} · ${r.odds}` : `${r.recommendation} · ${r.away_abbr} @ ${r.home_abbr}`;
     const outcome = state.adminRecordTab === "nrfi" && r.result ? `${hit ? "Hit" : "Miss"} · ${r.first_inning_away_runs ?? "?"}-${r.first_inning_home_runs ?? "?"} after 1` : hit ? "Hit" : r.result === "miss" ? "Miss" : "Pending";
@@ -955,6 +965,72 @@ function updateSavedCount() {
     bc.hidden = state.savedProps.size === 0;
   }
   window.dispatchEvent(new CustomEvent("vortex:dock-sync", { detail: { tab: state.currentTab, saved: state.savedProps.size } }));
+}
+
+function propLiveActual(row) {
+  const live = row.live || {};
+  const key = String(row.market_key || row.stat_type || "").toLowerCase();
+  if (key.includes("hits_runs") || key.includes("hits+runs") || key.includes("hrr")) return [live.hrr, "HRR"];
+  if (key.includes("total_bases") || key.includes("total bases")) return [live.total_bases, "TB"];
+  if (key.includes("pitcher_strikeout") || key === "strikeouts") return [live.strikeouts, "K"];
+  if (key.includes("pitcher_out") || key === "outs") return [live.outs, "outs"];
+  if (key.includes("hits_allowed")) return [live.hits_allowed, "hits allowed"];
+  if (key.includes("earned_run")) return [live.earned_runs, "ER"];
+  if (key.includes("home_run")) return [live.home_runs, "HR"];
+  if (key.includes("hit")) return [live.hits, "hits"];
+  return [row.actual_value, "current"];
+}
+
+function livePropState(row, actual) {
+  if (row.result === "hit") return ["hit", "Hit"];
+  if (row.result === "miss") return ["miss", "Miss"];
+  if (row.result === "void") return ["void", "Void"];
+  const live = row.live || {};
+  const pitcher = /pitcher_|strikeouts|outs|hits allowed|earned runs/i.test(`${row.market_key || ""} ${row.stat_type || ""}`);
+  if (pitcher && live.pitched && !live.is_current_pitcher && live.is_live) return ["miss", "Pulled · Loss"];
+  if (!live.is_live && !live.is_final) return ["pregame", live.detailed || "Pregame"];
+  if (actual == null) return ["pending", live.is_final ? "Finalizing" : "Live"];
+  const cleared = row.side === "under" ? Number(actual) < Number(row.line) : Number(actual) > Number(row.line);
+  const busted = row.side === "under" ? Number(actual) > Number(row.line) : false;
+  if (live.is_final) return cleared ? ["hit", "Hit"] : ["miss", "Miss"];
+  if (row.side === "over" && cleared) return ["hit", "Cleared"];
+  if (busted) return ["miss", "Busted"];
+  return ["live", "Live"];
+}
+
+function renderLivePropRecords(rows) {
+  const ordered = [...rows].sort((a, b) => {
+    const rank = (r) => r.live?.is_live ? 0 : (!r.live?.is_final ? 1 : 2);
+    return rank(a) - rank(b) || String(a.live?.start_time || "").localeCompare(String(b.live?.start_time || ""));
+  });
+  const groups = new Map();
+  ordered.forEach((row) => {
+    const key = row.live?.game_key || (row.result ? "settled" : "waiting");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  return [...groups.values()].map((gameRows) => {
+    const game = gameRows[0].live || {};
+    const isLive = Boolean(game.is_live);
+    const title = game.game_key ? `${game.away} ${game.away_score ?? 0}  ·  ${game.home} ${game.home_score ?? 0}` : (gameRows[0].result ? "Settled props" : "Waiting for game data");
+    const gameStatus = game.game_key ? (isLive ? `${game.inning || "LIVE"}` : game.is_final ? "FINAL" : game.detailed || "PREGAME") : "";
+    const cards = gameRows.map((row) => {
+      const live = row.live || {};
+      const [actualRaw, unit] = propLiveActual(row);
+      const actual = actualRaw == null ? null : Number(actualRaw);
+      const [stateClass, stateLabel] = livePropState(row, actual);
+      const pitcher = /pitcher_|strikeouts|outs|hits allowed|earned runs/i.test(`${row.market_key || ""} ${row.stat_type || ""}`);
+      const direction = String(row.side || "over").toLowerCase();
+      const need = actual == null ? null : direction === "over" ? Math.max(0, Math.floor(Number(row.line) - actual) + 1) : Math.max(0, actual - Number(row.line));
+      const progress = actual == null ? 0 : Math.min(100, Math.max(5, actual / Math.max(1, Number(row.line) + .5) * 100));
+      const tracking = pitcher
+        ? `${actual ?? "—"} ${unit}${live.pitch_count ? ` · ${live.pitch_count} pitches` : ""}${live.outs != null ? ` · ${Math.floor(Number(live.outs) / 3)}.${Number(live.outs) % 3} IP` : ""}`
+        : `${actual ?? "—"} ${unit}${live.at_bats != null ? ` · ${live.hits ?? 0}/${live.at_bats} batting` : ""}${live.plate_appearances ? ` · ${live.plate_appearances} PA` : ""}`;
+      const chase = stateClass === "live" && need ? `Needs ${need} more` : stateClass === "pregame" ? "Not started" : stateLabel;
+      return `<article class="live-prop-card ${stateClass}"><div class="live-prop-main"><span class="live-prop-name">${escapeHtml(row.player_name)}</span><strong>${escapeHtml(direction)} ${escapeHtml(String(row.line))} ${escapeHtml(row.stat_type)}</strong><small>${escapeHtml(tracking)}</small></div><div class="live-prop-meter"><i style="--live-progress:${progress}%"></i></div><div class="live-prop-state"><span>${escapeHtml(stateLabel)}</span><small>${escapeHtml(chase)}</small></div></article>`;
+    }).join("");
+    return `<section class="live-game-group ${isLive ? "is-live" : ""}"><header><div><span class="live-pulse"></span><strong>${escapeHtml(title)}</strong></div><b>${escapeHtml(gameStatus)}</b></header><div class="live-game-props">${cards}</div></section>`;
+  }).join("");
 }
 
 /* ---------- Search ---------- */

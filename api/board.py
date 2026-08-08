@@ -9,8 +9,13 @@ odds credits.
 """
 import json
 import sys
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from auth_core import session_with_live_access  # noqa: E402
@@ -19,6 +24,108 @@ from v2.board import admin_auth  # noqa: E402
 
 BOT_BOARD_KEY = "vortex:site_board"
 SPECIALS_KEY = "vortex:site_specials"
+MLB_BASE = "https://mlb-proxy.damian209466-d45.workers.dev/api/v1"
+
+
+def _norm(value):
+    text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode()
+    return " ".join(text.lower().replace(".", "").split())
+
+
+def _json_get(path, params=None):
+    url = f"{MLB_BASE}{path}"
+    if params:
+        url += "?" + urlencode(params)
+    req = Request(url, headers={"Accept": "application/json", "User-Agent": "Krazy-Picks/1.0"})
+    with urlopen(req, timeout=8) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _live_game(game):
+    pk = game.get("gamePk")
+    status = game.get("status", {})
+    abstract = status.get("abstractGameState", "Preview")
+    try:
+        box = _json_get(f"/game/{pk}/boxscore")
+    except Exception:
+        box = {}
+    linescore = game.get("linescore", {})
+    inning = linescore.get("currentInningOrdinal") or ""
+    inning_state = linescore.get("inningState") or ""
+    away = game.get("teams", {}).get("away", {})
+    home = game.get("teams", {}).get("home", {})
+    game_info = {
+        "game_pk": pk,
+        "game_key": str(pk),
+        "away": away.get("team", {}).get("abbreviation") or away.get("team", {}).get("name", "Away"),
+        "home": home.get("team", {}).get("abbreviation") or home.get("team", {}).get("name", "Home"),
+        "away_score": away.get("score", 0),
+        "home_score": home.get("score", 0),
+        "abstract": abstract,
+        "detailed": status.get("detailedState", abstract),
+        "inning": " ".join(part for part in (inning_state, str(inning)) if part),
+        "is_live": abstract == "Live",
+        "is_final": abstract == "Final",
+        "start_time": game.get("gameDate"),
+    }
+    players = {}
+    for side in ("away", "home"):
+        team = box.get("teams", {}).get(side, {})
+        team_name = game_info[side]
+        for pdata in team.get("players", {}).values():
+            name = pdata.get("person", {}).get("fullName")
+            if not name:
+                continue
+            batting = pdata.get("stats", {}).get("batting", {})
+            pitching = pdata.get("stats", {}).get("pitching", {})
+            game_status = pdata.get("gameStatus", {})
+            hits = int(batting.get("hits", 0) or 0)
+            runs = int(batting.get("runs", 0) or 0)
+            rbi = int(batting.get("rbi", 0) or 0)
+            players[_norm(name)] = {
+                **game_info,
+                "team": team_name,
+                "hits": hits,
+                "runs": runs,
+                "rbi": rbi,
+                "hrr": hits + runs + rbi,
+                "total_bases": int(batting.get("totalBases", 0) or 0),
+                "home_runs": int(batting.get("homeRuns", 0) or 0),
+                "at_bats": int(batting.get("atBats", 0) or 0),
+                "plate_appearances": int(batting.get("plateAppearances", 0) or 0),
+                "strikeouts": int(pitching.get("strikeOuts", 0) or 0),
+                "pitch_count": int(pitching.get("numberOfPitches", pitching.get("pitchesThrown", 0)) or 0),
+                "outs": int(pitching.get("outs", 0) or 0),
+                "hits_allowed": int(pitching.get("hits", 0) or 0),
+                "earned_runs": int(pitching.get("earnedRuns", 0) or 0),
+                "is_current_pitcher": bool(game_status.get("isCurrentPitcher")),
+                "pitched": bool(pitching.get("outs") or pitching.get("battersFaced") or pitching.get("numberOfPitches") or pitching.get("pitchesThrown")),
+            }
+    return players
+
+
+def _attach_live_records(data):
+    records = data.get("records", {})
+    props = records.get("props", [])
+    if not props:
+        return data
+    dates = [str(row.get("game_date")) for row in props if row.get("game_date")]
+    game_date = max(dates) if dates else str((datetime.now(timezone.utc) - timedelta(hours=10)).date())
+    try:
+        schedule = _json_get("/schedule", {"sportId": 1, "date": game_date, "hydrate": "linescore"})
+        games = [g for day in schedule.get("dates", []) for g in day.get("games", [])]
+        live_players = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(_live_game, game) for game in games]
+            for future in as_completed(futures):
+                live_players.update(future.result())
+        for row in props:
+            live = live_players.get(_norm(row.get("player_name")))
+            if live:
+                row["live"] = live
+    except Exception:
+        pass
+    return data
 
 
 class handler(BaseHTTPRequestHandler):
@@ -29,7 +136,6 @@ class handler(BaseHTTPRequestHandler):
         if not session_with_live_access(self.headers):
             return self._send(401, {"error": "Sign in with Discord to use live research.", "authRequired": True})
 
-        from urllib.parse import parse_qs, urlparse
         view = (parse_qs(urlparse(self.path).query).get("view") or [""])[0]
         if view in ("specials", "results"):
             if view == "results" and not admin_auth.is_admin_request(self.headers):
@@ -40,7 +146,8 @@ class handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 data = {"moneylines": [], "nrfi": [], "records": {}}
             if view == "results":
-                return self._send(200, {"generated_at": data.get("generated_at"), "records": data.get("records", {})})
+                result = {"generated_at": data.get("generated_at"), "records": data.get("records", {})}
+                return self._send(200, _attach_live_records(result))
             return self._send(200, {"generated_at": data.get("generated_at"), "moneylines": data.get("moneylines", []), "moneyline_research": data.get("moneyline_research", []), "nrfi": data.get("nrfi", [])})
 
         raw = store.get(BOT_BOARD_KEY)

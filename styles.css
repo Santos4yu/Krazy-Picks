@@ -31,6 +31,18 @@
   --card-shadow: 0 18px 44px rgba(0,0,0,.28);
 }
 
+/* Live prop tracker on the Results tab. */
+.live-game-group { overflow:hidden; border:1px solid rgba(74,130,222,.2); border-radius:12px; background:linear-gradient(145deg,rgba(15,22,35,.98),rgba(7,10,18,.98)); }
+.live-game-group > header { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:50px; padding:11px 15px; border-bottom:1px solid rgba(74,130,222,.16); background:rgba(255,255,255,.025); }
+.live-game-group > header div { display:flex; align-items:center; gap:9px; }.live-game-group > header strong { font-size:14px; }.live-game-group > header b { color:var(--text-dim); font:800 10px var(--font-mono); letter-spacing:.08em; }
+.live-game-group.is-live > header b { color:#36e3b0; }.live-pulse { width:7px; height:7px; border-radius:50%; background:#607089; }.is-live .live-pulse { background:#28e0a5; box-shadow:0 0 12px rgba(40,224,165,.8); animation:boot-blink 1.2s steps(2) infinite; }
+.live-game-props { display:grid; }.live-prop-card { position:relative; display:grid; grid-template-columns:minmax(0,1fr) minmax(120px,240px) 105px; align-items:center; gap:18px; min-height:78px; padding:12px 15px; border-bottom:1px solid rgba(74,130,222,.11); }
+.live-prop-card:last-child { border-bottom:0; }.live-prop-card::before { content:""; position:absolute; inset:12px auto 12px 0; width:2px; border-radius:2px; background:#526078; }.live-prop-card.live::before { background:#ffad32; }.live-prop-card.hit::before { background:#2be39f; }.live-prop-card.miss::before { background:#ef5c68; }
+.live-prop-main { display:grid; gap:3px; min-width:0; }.live-prop-name { color:#fff; font-size:14px; font-weight:800; }.live-prop-main strong { overflow:hidden; color:#d6deeb; font-size:12px; text-overflow:ellipsis; white-space:nowrap; text-transform:capitalize; }.live-prop-main small { color:#718098; font:600 10px var(--font-mono); }
+.live-prop-meter { height:5px; overflow:hidden; border-radius:99px; background:#182236; }.live-prop-meter i { display:block; width:var(--live-progress); height:100%; border-radius:inherit; background:linear-gradient(90deg,#ff8f19,#ffd25d); transition:width .4s ease; }.live-prop-card.hit .live-prop-meter i { background:#2be39f; }.live-prop-card.miss .live-prop-meter i { background:#ef5c68; }
+.live-prop-state { display:grid; justify-items:end; gap:3px; text-align:right; }.live-prop-state span { padding:4px 7px; border:1px solid rgba(255,173,50,.28); border-radius:5px; color:#ffc25e; background:rgba(255,173,50,.08); font:800 9px var(--font-mono); letter-spacing:.05em; text-transform:uppercase; }.live-prop-card.hit .live-prop-state span { border-color:rgba(43,227,159,.25); color:#2be39f; background:rgba(43,227,159,.08); }.live-prop-card.miss .live-prop-state span { border-color:rgba(239,92,104,.25); color:#ff7681; background:rgba(239,92,104,.08); }.live-prop-state small { color:#69778d; font-size:9px; }
+@media(max-width:680px){.live-prop-card{grid-template-columns:1fr auto;gap:9px;padding:12px}.live-prop-meter{grid-column:1/-1;grid-row:2}.live-prop-state{grid-column:2;grid-row:1}.live-prop-main strong{white-space:normal}.live-game-group>header{padding:10px 12px}}
+
 html, body { background: #05070d; color: var(--text); }
 body::before {
   background:

@@ -987,7 +987,7 @@ function livePropState(row, actual) {
   if (row.result === "void") return ["void", "Void"];
   const live = row.live || {};
   const pitcher = /pitcher_|strikeouts|outs|hits allowed|earned runs/i.test(`${row.market_key || ""} ${row.stat_type || ""}`);
-  if (pitcher && live.pitched && !live.is_current_pitcher && live.is_live) return ["miss", "Pulled · Loss"];
+  if (pitcher && live.pitcher_replaced && live.is_live) return ["miss", "Pulled · Loss"];
   if (!live.is_live && !live.is_final) return ["pregame", live.detailed || "Pregame"];
   if (actual == null) return ["pending", live.is_final ? "Finalizing" : "Live"];
   const cleared = row.side === "under" ? Number(actual) < Number(row.line) : Number(actual) > Number(row.line);

@@ -72,8 +72,11 @@ def _live_game(game):
     for side in ("away", "home"):
         team = box.get("teams", {}).get(side, {})
         team_name = game_info[side]
+        used_pitchers = team.get("pitchers", []) or []
+        latest_pitcher_id = int(used_pitchers[-1]) if used_pitchers else None
         for pdata in team.get("players", {}).values():
             name = pdata.get("person", {}).get("fullName")
+            player_id = pdata.get("person", {}).get("id")
             if not name:
                 continue
             batting = pdata.get("stats", {}).get("batting", {})
@@ -100,6 +103,7 @@ def _live_game(game):
                 "earned_runs": int(pitching.get("earnedRuns", 0) or 0),
                 "is_current_pitcher": bool(game_status.get("isCurrentPitcher")),
                 "pitched": bool(pitching.get("outs") or pitching.get("battersFaced") or pitching.get("numberOfPitches") or pitching.get("pitchesThrown")),
+                "pitcher_replaced": bool(abstract == "Live" and pitching.get("battersFaced") and latest_pitcher_id and player_id != latest_pitcher_id),
             }
     return players
 

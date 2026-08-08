@@ -3861,17 +3861,21 @@ body::before,body::after{display:none}.grid-bg,.vortex-swirl,.glow-orb{display:n
 .v2-card {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 10px;
+  min-height: 70px !important;
+  padding: 9px 16px 9px 10px !important;
+  overflow: hidden;
 }
+#v2-board-list { gap: 7px !important; }
 .v2-card-headshot {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  object-fit: cover;
+  width: 58px;
+  height: 58px;
+  border-radius: 0;
+  object-fit: contain;
+  object-position: center bottom;
   flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: 0;
 }
 .v2-card-headshot-fallback {
   width: 48px;
@@ -3888,7 +3892,7 @@ body::before,body::after{display:none}.grid-bg,.vortex-swirl,.glow-orb{display:n
 .v2-card-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
   flex: 1;
 }
@@ -3913,7 +3917,7 @@ body::before,body::after{display:none}.grid-bg,.vortex-swirl,.glow-orb{display:n
 .v2-card-bottom {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .v2-card-matchup {
@@ -3937,7 +3941,8 @@ body::before,body::after{display:none}.grid-bg,.vortex-swirl,.glow-orb{display:n
 }
 @media (max-width: 640px) {
   .v2-card { padding: 12px; gap: 10px; }
-  .v2-card-headshot, .v2-card-headshot-fallback { width: 40px; height: 40px; }
+  .v2-card-headshot { width: 48px; height: 52px; }
+  .v2-card-headshot-fallback { width: 40px; height: 40px; }
   .v2-card-name { font-size: 13px; }
   .v2-card-bottom { gap: 5px; }
 }
@@ -4189,6 +4194,28 @@ body::before, body::after, .grid-bg, .vortex-swirl, .glow-orb { display:none !im
   .tools-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .research-snapshot { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
   .snapshot-item:nth-child(even) { border-right:0 !important; }
+}
+
+/* Props board finishing pass — intentionally last so shared slate rules do not
+   reintroduce the roomy card spacing. */
+#v2-board-list { gap:7px !important; }
+#v2-board-list .v2-card {
+  min-height:70px !important;
+  padding:9px 16px 9px 10px !important;
+  border-radius:10px !important;
+}
+#v2-board-list .v2-card-headshot {
+  width:58px;
+  height:58px;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  object-fit:contain;
+  object-position:center bottom;
+}
+@media (max-width:640px) {
+  #v2-board-list .v2-card { min-height:64px !important; padding:7px 11px 7px 6px !important; }
+  #v2-board-list .v2-card-headshot { width:48px; height:52px; }
 }
 @media (max-width:560px) {
   .tab-panel { width:calc(100% - 20px) !important; padding-top:18px !important; }

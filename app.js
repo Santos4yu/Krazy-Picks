@@ -3259,18 +3259,8 @@ function renderBotBoard(data) {
   els.v2BoardDate.textContent = props.length
     ? `${props.length} prop${props.length === 1 ? "" : "s"} · updated ${data.generated_at ? new Date(data.generated_at).toLocaleString() : "recently"}`
     : "KRAZY PICKS ACTIVE BOARD — data-driven props: filtered, scored, ranked.";
-  const automation = data.automation || {};
-  if (els.autoBoardState) {
-    els.autoBoardState.textContent = automation.enabled ? "Scanning 24/7" : "Status unavailable";
-    els.autoActiveCadence.textContent = automation.active_minutes ? `Every ${automation.active_minutes} min` : "—";
-    els.autoPregameCadence.textContent = automation.pregame_minutes ? `Every ${automation.pregame_minutes} min` : "—";
-    els.autoCreditBudget.textContent = automation.daily_credit_cap
-      ? `${automation.credits_reserved_today || 0} / ${automation.daily_credit_cap}` : "—";
-    els.autoMonthlyReserve.textContent = automation.monthly_credit_reserve
-      ? `${Number(automation.monthly_credit_reserve).toLocaleString()} protected` : "—";
-  }
   els.v2BoardEmpty.textContent =
-    "The board is empty right now — it fills as soon as the data engine runs (backend/update_board.py).";
+    "The board is empty right now. Check back shortly for new qualified plays.";
   els.v2BoardList.innerHTML = "";
 
   if (props.length === 0) {
@@ -3279,7 +3269,6 @@ function renderBotBoard(data) {
   }
   els.v2BoardEmpty.hidden = true;
 
-  let lastMatchup = "";
   props.forEach((p, i) => {
     const row = document.createElement("div");
     row.className = "slate-row v2-row v2-card";
@@ -3316,15 +3305,6 @@ function renderBotBoard(data) {
     const timeStr = gameTime ? gameTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
     const isHome = stats.is_home;
     const matchupLine = opponent ? (isHome ? `vs ${opponent}` : `@ ${opponent}`) : "";
-
-    const matchupKey = `${matchupLine}|${timeStr}`;
-    if (matchupKey && matchupKey !== lastMatchup) {
-      const group = document.createElement("div");
-      group.className = "v2-game-group";
-      group.textContent = `${matchupLine || "Matchup"}${timeStr ? ` · ${timeStr}` : ""}`;
-      els.v2BoardList.appendChild(group);
-      lastMatchup = matchupKey;
-    }
 
     const evText = fmtBotEv(p);
 

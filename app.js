@@ -2982,8 +2982,8 @@ function wireSlate() {
     const tool = button.dataset.tool;
     els.slateDate.textContent = labels[tool] || labels.attack;
     if (tool === "strikeouts") {
-      state.boardFilter = "strikeout";
-      const strikeoutFilter = els.boardFilterRow?.querySelector('[data-board-filter="strikeout"]');
+      state.boardFilter = "strikeouts";
+      const strikeoutFilter = els.boardFilterRow?.querySelector('[data-board-filter="strikeouts"]');
       els.boardFilterRow?.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === strikeoutFilter));
       switchTab("v2", document.querySelector('.tab-btn[data-tab="v2"]'));
       loadV2Board(true);
@@ -3230,24 +3230,16 @@ function boardMatchupLabel(score) {
 function renderBotBoard(data) {
   const recommendedProps = data.props || [];
   const researchPitchers = data.pitcher_research || [];
-  const sourceProps = state.boardFilter === "strikeout"
+  const sourceProps = state.boardFilter === "strikeouts"
     ? [...recommendedProps, ...researchPitchers]
     : recommendedProps;
-  const seen = new Set();
   const allProps = sourceProps.map((p, sourceIndex) => ({ ...p, _boardIndex: sourceIndex }))
-    .filter((p) => {
-      const key = [p.player_name, p.stat_type, p.line, p.stats?.side || "over"].join("|");
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
     .filter((p) => p.stats && p.stats.player_id);
   let props = allProps.filter((p) => {
     const filter = state.boardFilter;
     if (filter === "all") return true;
-    if (filter === "ready") return ["ELITE", "STRONG"].includes(p.tier);
     if (filter === "matchup") return Number.isFinite(Number(p.stats?.matchup_score));
-    return (p.stat_type || "").toLowerCase().includes(filter);
+    return boardStatCategory(p.stat_type) === filter;
   });
   if (state.boardFilter === "matchup") {
     props = props.sort((a, b) =>
@@ -3347,6 +3339,15 @@ function renderBotBoard(data) {
     });
     els.v2BoardList.appendChild(row);
   });
+}
+
+function boardStatCategory(statType) {
+  const stat = String(statType || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (["hits runs rbis", "hits runs rbi", "hrr", "hrrs"].includes(stat)) return "hrr";
+  if (["total bases", "total base", "tb"].includes(stat)) return "total-bases";
+  if (["hits", "hit"].includes(stat)) return "hits";
+  if (["strikeouts", "strikeout", "pitcher strikeouts", "pitcher strikeout", "ks", "k"].includes(stat)) return "strikeouts";
+  return "other";
 }
 
 /* ---------- Automatic Parlay Builder ---------- */

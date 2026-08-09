@@ -2141,7 +2141,7 @@ def get_team_lineup(team_id: int) -> list[dict]:
     data = _get("/schedule", {
         "sportId": 1, "date": today,
         "hydrate": "lineups",
-    }, cache_key=None)
+    }, cache_key=f"lineups_{today}")
     if not data:
         return []
     team_str = str(team_id)

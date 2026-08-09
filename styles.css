@@ -4442,6 +4442,122 @@ body::before { display:block !important; background:radial-gradient(circle at 8%
   .analysis-loader::before,.analysis-radar span,.analysis-radar i,.analysis-radar b,.analysis-pipeline>span,.analysis-loader-progress i,.analysis-preview i,.analysis-preview b,.analysis-preview em,.slate-live-loader i,.slate-row-loading,.slate-load-rank,.slate-load-score,.slate-load-copy i,.slate-load-copy b,.slate-load-pulse,.team-loader-radar::after{animation:none!important}
 }
 
+/* Compact Krazy Picks prop builder — matches the navy research workspace. */
+.player-profile[hidden] { display:none !important; }
+.player-profile {
+  display:grid !important;
+  grid-template-columns:minmax(250px,.72fr) minmax(360px,1.28fr);
+  grid-template-areas:"player stat" "player line";
+  align-items:center;
+  gap:10px 26px;
+  min-height:132px;
+  padding:35px 24px 18px !important;
+  border:1px solid rgba(69,139,247,.24) !important;
+  border-radius:14px !important;
+  background:linear-gradient(115deg,rgba(13,21,35,.98),rgba(7,12,21,.98)) !important;
+  box-shadow:0 18px 44px rgba(0,0,0,.24),inset 0 1px rgba(255,255,255,.025) !important;
+}
+.player-profile::before {
+  content:"KRAZY PICKS  ·  PROP BUILDER";
+  position:absolute; top:13px; left:24px;
+  color:#5caeff;
+  font:800 8px var(--font-mono);
+  letter-spacing:1.6px;
+}
+.player-profile::after {
+  content:"";
+  position:absolute; top:0; left:24px; width:72px; height:2px;
+  background:linear-gradient(90deg,var(--accent),#ffca55);
+  box-shadow:0 0 14px rgba(255,157,22,.32);
+}
+.player-profile .profile-head {
+  grid-area:player;
+  align-self:stretch;
+  min-width:0;
+  padding-right:24px;
+  border-right:1px solid rgba(84,135,211,.14);
+}
+.player-profile .profile-name { font-size:19px; letter-spacing:-.65px; }
+.player-profile .profile-sub { color:#77869d; font:600 10px var(--font-mono); }
+.player-profile .profile-stats-select-wrap { grid-area:stat; max-width:none; margin:0; }
+.player-profile .profile-stats-trigger {
+  min-height:42px;
+  padding:10px 14px;
+  border-color:rgba(72,139,241,.22);
+  border-radius:9px;
+  background:#0b1320;
+  box-shadow:inset 3px 0 #267ef1;
+  font-size:13px;
+}
+.player-profile .line-picker {
+  grid-area:line;
+  margin:0;
+  padding:0;
+  border:0;
+}
+.player-profile .line-picker-row { margin:0 0 11px; gap:12px; }
+.player-profile .side-toggle,.player-profile .line-input-group { border-color:rgba(79,130,204,.22); background:#09111d; }
+.player-profile .side-btn { min-width:68px; padding:8px 15px; }
+.player-profile .line-slider { height:4px; background:linear-gradient(90deg,#28a2ff var(--fill,50%),rgba(87,116,158,.22) var(--fill,50%)); }
+.player-profile .line-slider::-webkit-slider-thumb { width:15px; height:15px; border:3px solid #09111d; background:#68bdff; box-shadow:0 0 0 1px #8dcfff,0 0 14px rgba(55,159,255,.3); }
+.player-profile .line-slider::-moz-range-thumb { width:15px; height:15px; border:3px solid #09111d; background:#68bdff; box-shadow:0 0 0 1px #8dcfff,0 0 14px rgba(55,159,255,.3); }
+
+/* Quiet report-shaped loader. It previews the real analysis hierarchy. */
+.kp-analysis-loader {
+  position:relative;
+  overflow:hidden;
+  padding:18px 20px 15px;
+  border:1px solid rgba(70,137,239,.22);
+  border-radius:13px;
+  background:linear-gradient(120deg,rgba(13,21,35,.98),rgba(7,12,21,.98));
+  box-shadow:0 16px 38px rgba(0,0,0,.22),inset 0 1px rgba(255,255,255,.025);
+}
+.kp-analysis-loader::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; background:linear-gradient(180deg,#208aff,#61bdff 62%,var(--accent)); }
+.kp-loader-head { display:grid; grid-template-columns:38px 1fr auto; align-items:center; gap:12px; }
+.kp-loader-mark { position:relative; width:34px; height:34px; border:1px solid rgba(71,157,255,.32); border-radius:10px; background:#0a1625; }
+.kp-loader-mark::before,.kp-loader-mark::after { content:""; position:absolute; inset:8px; border:1px solid rgba(89,182,255,.36); border-radius:50%; }
+.kp-loader-mark::after { inset:14px; border:0; background:#5bb8ff; box-shadow:0 0 10px rgba(62,170,255,.75); animation:kp-core-pulse 1.35s ease-in-out infinite; }
+.kp-loader-mark i { position:absolute; inset:5px; border:1px solid transparent; border-top-color:var(--accent); border-radius:50%; animation:radar-turn 1.1s linear infinite; }
+.kp-loader-copy { min-width:0; }
+.kp-loader-copy>span { display:block; margin-bottom:3px; color:#5daeff; font:800 8px var(--font-mono); letter-spacing:1.35px; }
+.kp-loader-copy strong { display:block; overflow:hidden; color:#f3f6fb; font-size:17px; letter-spacing:-.45px; text-overflow:ellipsis; white-space:nowrap; }
+.kp-loader-copy small { display:block; margin-top:3px; color:#708098; font:700 8px var(--font-mono); letter-spacing:.7px; text-transform:uppercase; }
+.kp-loader-status { padding:6px 9px; border:1px solid rgba(255,164,36,.25); border-radius:999px; color:#ffb340; background:rgba(255,157,22,.07); font:800 7px var(--font-mono); letter-spacing:1px; }
+.kp-loader-progress { height:2px; margin:15px 0 12px 50px; overflow:hidden; border-radius:4px; background:rgba(83,122,180,.17); }
+.kp-loader-progress i { display:block; width:38%; height:100%; background:linear-gradient(90deg,transparent,#369dff,#7ac9ff,transparent); animation:kp-load-track 1.7s ease-in-out infinite; }
+.kp-loader-signals { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-left:50px; }
+.kp-loader-signals>span { display:grid; grid-template-columns:24px 1fr; align-items:center; gap:2px 7px; min-height:44px; padding:8px 10px; border:1px solid rgba(73,124,197,.13); border-radius:8px; background:rgba(5,11,20,.52); }
+.kp-loader-signals i { grid-row:1/3; color:#4c9dff; font:800 8px var(--font-mono); }
+.kp-loader-signals b { color:#a9b5c6; font:800 8px var(--font-mono); letter-spacing:.7px; }
+.kp-loader-signals em { display:block; width:72%; height:3px; overflow:hidden; border-radius:4px; background:rgba(91,126,177,.16); }
+.kp-loader-signals em::after { content:""; display:block; width:45%; height:100%; background:#347fe1; animation:kp-signal 2.4s ease-in-out infinite; }
+.kp-loader-signals>span:nth-child(2) em::after { animation-delay:.45s; }.kp-loader-signals>span:nth-child(3) em::after { animation-delay:.9s; }
+.kp-analysis-loader>p { margin:11px 0 0 50px; color:#68778d; font:600 9px var(--font-mono); }
+.kp-loader-dots { display:inline-flex; gap:3px; margin-left:5px; }.kp-loader-dots i { width:3px; height:3px; border-radius:50%; background:#579fe9; animation:kp-dot 1.2s ease-in-out infinite; }.kp-loader-dots i:nth-child(2){animation-delay:.2s}.kp-loader-dots i:nth-child(3){animation-delay:.4s}
+@keyframes kp-core-pulse { 50%{opacity:.35;transform:scale(.68)} }
+@keyframes kp-load-track { from{transform:translateX(-105%)} to{transform:translateX(290%)} }
+@keyframes kp-signal { 0%,100%{transform:translateX(-20%);opacity:.45} 50%{transform:translateX(145%);opacity:1} }
+@keyframes kp-dot { 0%,60%,100%{opacity:.25;transform:translateY(0)} 30%{opacity:1;transform:translateY(-2px)} }
+
+@media(max-width:780px){
+  .player-profile { grid-template-columns:1fr; grid-template-areas:"player" "stat" "line"; gap:12px; padding:35px 16px 16px !important; }
+  .player-profile .profile-head { min-height:58px; padding:0 0 10px; border-right:0; border-bottom:1px solid rgba(84,135,211,.14); }
+  .player-profile .avatar-cutout.avatar-lg { width:58px; height:60px; }
+}
+@media(max-width:560px){
+  .kp-analysis-loader { padding:15px 14px 13px; }
+  .kp-loader-head { grid-template-columns:34px 1fr; }
+  .kp-loader-status { display:none; }
+  .kp-loader-progress,.kp-loader-signals,.kp-analysis-loader>p { margin-left:0; }
+  .kp-loader-signals { grid-template-columns:1fr; }
+  .kp-loader-signals>span { min-height:36px; }
+  .player-profile .line-picker-row { align-items:stretch; }
+  .player-profile .side-toggle,.player-profile .line-input-group { flex:1; justify-content:center; }
+}
+@media(prefers-reduced-motion:reduce){
+  .kp-loader-mark::after,.kp-loader-mark i,.kp-loader-progress i,.kp-loader-signals em::after,.kp-loader-dots i{animation:none!important}
+}
+
 /* The bottom dock replaces the old hamburger navigation. */
 .side-menu-toggle { display:none !important; }
 .settings-btn { transition:opacity .34s ease,transform .42s cubic-bezier(.22,1,.36,1),filter .34s ease !important; }

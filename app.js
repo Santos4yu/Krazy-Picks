@@ -1537,25 +1537,23 @@ function renderLoadingState(player, stat, line, side) {
   const skeleton = document.createElement("div");
   skeleton.className = "report-skeleton";
   skeleton.innerHTML = `
-    <div class="analysis-loader" role="status" aria-live="polite">
-      <div class="analysis-loader-head">
-        <div><span class="analysis-kicker">KRAZY PICKS LIVE ENGINE</span><strong>${escapeHtml(player)}</strong><small>${escapeHtml(side)} ${line} · ${escapeHtml(stat)}</small></div>
-        <span class="analysis-live-chip"><i></i> ANALYZING</span>
-      </div>
-      <div class="analysis-loader-body">
-        <div class="analysis-radar" aria-hidden="true"><span></span><i></i><b></b></div>
-        <div class="analysis-pipeline">
-          <span><i>01</i><b>PLAYER FORM</b><small>volume + consistency</small></span>
-          <span><i>02</i><b>MATCHUP LAYER</b><small>pitch mix + park + splits</small></span>
-          <span><i>03</i><b>EDGE CHECK</b><small>line strength + risk</small></span>
+    <div class="kp-analysis-loader" role="status" aria-live="polite">
+      <div class="kp-loader-head">
+        <span class="kp-loader-mark"><i></i></span>
+        <div class="kp-loader-copy">
+          <span>LIVE PROP RESEARCH</span>
+          <strong>${escapeHtml(player)}</strong>
+          <small>${escapeHtml(side)} ${line} · ${escapeHtml(stat)}</small>
         </div>
+        <b class="kp-loader-status">BUILDING READ</b>
       </div>
-      <div class="analysis-loader-progress"><i></i></div>
-    </div>
-    <div class="analysis-preview" aria-hidden="true">
-      <span><i></i><b></b><em></em></span>
-      <span><i></i><b></b><em></em></span>
-      <span><i></i><b></b><em></em></span>
+      <div class="kp-loader-progress"><i></i></div>
+      <div class="kp-loader-signals" aria-hidden="true">
+        <span><i>01</i><b>RECENT FORM</b><em></em></span>
+        <span><i>02</i><b>GAME MATCHUP</b><em></em></span>
+        <span><i>03</i><b>LINE + RISK</b><em></em></span>
+      </div>
+      <p>Checking the data behind this prop<span class="kp-loader-dots"><i></i><i></i><i></i></span></p>
     </div>
   `;
   els.reportWrap.appendChild(skeleton);

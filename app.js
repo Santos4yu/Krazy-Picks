@@ -101,6 +101,9 @@ const state = {
   props: [],
   activeIndex: -1,
   savedProps: loadSaved(), // Map<id, prop>
+  // When Research is opened from a board prop, keep the board refresh's
+  // matchup grade authoritative for that exact player/stat/line/side.
+  boardResearchContext: null,
 
 
   parlaySelection: new Set(),
@@ -1004,18 +1007,24 @@ function livePropState(row, actual) {
 function renderLivePropRecords(rows) {
   const ordered = [...rows].sort((a, b) => {
     const rank = (r) => r.live?.is_live ? 0 : (!r.live?.is_final ? 1 : 2);
-    return rank(a) - rank(b) || String(a.live?.start_time || "").localeCompare(String(b.live?.start_time || ""));
+    return String(b.game_date || "").localeCompare(String(a.game_date || ""))
+      || rank(a) - rank(b)
+      || String(a.live?.start_time || "").localeCompare(String(b.live?.start_time || ""));
   });
   const groups = new Map();
   ordered.forEach((row) => {
-    const key = row.live?.game_key || (row.result ? "settled" : "waiting");
+    const date = row.game_date || "Unknown date";
+    const key = `${date}|${row.live?.game_key || (row.result ? "settled" : "waiting")}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   });
   return [...groups.values()].map((gameRows) => {
     const game = gameRows[0].live || {};
+    const dateTitle = gameRows[0].game_date || "Unknown date";
     const isLive = Boolean(game.is_live);
-    const title = game.game_key ? `${game.away} ${game.away_score ?? 0}  ·  ${game.home} ${game.home_score ?? 0}` : (gameRows[0].result ? "Settled props" : "Waiting for game data");
+    const title = game.game_key
+      ? `${dateTitle} · ${game.away} ${game.away_score ?? 0}  ·  ${game.home} ${game.home_score ?? 0}`
+      : `${dateTitle} · ${gameRows[0].result ? "Settled props" : "Waiting for game data"}`;
     const gameStatus = game.game_key ? (isLive ? `${game.inning || "LIVE"}` : game.is_final ? "FINAL" : game.detailed || "PREGAME") : "";
     const cards = gameRows.map((row) => {
       const live = row.live || {};
@@ -1030,7 +1039,8 @@ function renderLivePropRecords(rows) {
         ? `${actual ?? "—"} ${unit}${live.pitch_count ? ` · ${live.pitch_count} pitches` : ""}${live.outs != null ? ` · ${Math.floor(Number(live.outs) / 3)}.${Number(live.outs) % 3} IP` : ""}`
         : `${actual ?? "—"} ${unit}${live.at_bats != null ? ` · ${live.hits ?? 0}/${live.at_bats} batting` : ""}${live.plate_appearances ? ` · ${live.plate_appearances} PA` : ""}`;
       const chase = stateClass === "live" && need ? `Needs ${need} more` : stateClass === "pregame" ? "Not started" : stateLabel;
-      return `<article class="live-prop-card ${stateClass}"><div class="live-prop-main"><span class="live-prop-name">${escapeHtml(row.player_name)}</span><strong>${escapeHtml(direction)} ${escapeHtml(String(row.line))} ${escapeHtml(row.stat_type)}</strong><small>${escapeHtml(tracking)}</small></div><div class="live-prop-meter"><i style="--live-progress:${progress}%"></i></div><div class="live-prop-state"><span>${escapeHtml(stateLabel)}</span><small>${escapeHtml(chase)}</small></div></article>`;
+      const modelMeta = [row.vortex_score != null ? `Score ${row.vortex_score}` : "", row.matchup_score != null ? `Matchup ${Math.round(Number(row.matchup_score))}` : ""].filter(Boolean).join(" · ");
+      return `<article class="live-prop-card ${stateClass}"><div class="live-prop-main"><span class="live-prop-name">${escapeHtml(row.player_name)}</span><strong>${escapeHtml(direction)} ${escapeHtml(String(row.line))} ${escapeHtml(row.stat_type)}</strong><small>${escapeHtml(tracking)}${modelMeta ? ` · ${escapeHtml(modelMeta)}` : ""}</small></div><div class="live-prop-meter"><i style="--live-progress:${progress}%"></i></div><div class="live-prop-state"><span>${escapeHtml(stateLabel)}</span><small>${escapeHtml(chase)}</small></div></article>`;
     }).join("");
     return `<section class="live-game-group ${isLive ? "is-live" : ""}"><header><div><span class="live-pulse"></span><strong>${escapeHtml(title)}</strong></div><b>${escapeHtml(gameStatus)}</b></header><div class="live-game-props">${cards}</div></section>`;
   }).join("");
@@ -1484,6 +1494,23 @@ function setLineValue(value, { immediate = false } = {}) {
 
 let lineSelectionToken = 0;
 
+function withAuthoritativeBoardMatchup(prop, player, stat, line, side) {
+  const boardContext = state.boardResearchContext;
+  const sameBoardProp = boardContext
+    && boardContext.player.toLowerCase() === String(player).toLowerCase()
+    && boardContext.stat === stat
+    && Math.abs(Number(boardContext.line) - Number(line)) < 0.01
+    && boardContext.side === String(side).toLowerCase();
+  if (!sameBoardProp || !Number.isFinite(Number(boardContext.matchupScore))) return prop;
+  return {
+    ...prop,
+    matchupScore: Number(boardContext.matchupScore),
+    matchupLabel: boardContext.matchupLabel,
+    matchupCoverage: boardContext.matchupCoverage,
+    matchupFactors: boardContext.matchupFactors,
+  };
+}
+
 function applyLineSelection() {
   const match = propsForPlayer().find(
     (p) => p.betType === cmd.stat && Math.abs(p.line - cmd.line) < 0.01 && p.side === cmd.side
@@ -1493,7 +1520,7 @@ function applyLineSelection() {
 
   if (match) {
     els.lineNoData.hidden = true;
-    renderReport(match);
+    renderReport(withAuthoritativeBoardMatchup(match, cmd.player, cmd.stat, cmd.line, cmd.side));
     return;
   }
 
@@ -1522,7 +1549,7 @@ async function fetchLivePrediction(player, stat, line, side, token) {
   if (token !== lineSelectionToken) return; // a newer selection superseded this one
 
   if (result) {
-    renderReport(result);
+    renderReport(withAuthoritativeBoardMatchup(result, player, stat, line, side));
     return;
   }
 
@@ -2417,9 +2444,6 @@ function buildReportNode(p) {
   fillProjection(node, p);
   fillWhyItHits(node, p);
   fillBiggestEdgesRisks(node, p);
-  fillConfidenceBreakdown(node, p);
-  fillScorecardV2(node, p);
-  fillDistribution(node, p);
   fillPitchArsenal(node, p);
   fillSplitFactor(node, p);
   fillMatchup(node, p);
@@ -3418,8 +3442,9 @@ function renderBotBoard(data) {
   const sourceProps = state.boardFilter === "strikeouts"
     ? [...recommendedProps, ...researchPitchers]
     : recommendedProps;
-  const allProps = sourceProps.map((p, sourceIndex) => ({ ...p, _boardIndex: sourceIndex }))
-    .filter((p) => p.stats && p.stats.player_id);
+  // player_id is optional presentation metadata used for headshots. A scored
+  // board row remains valid without it and must still mirror Discord.
+  const allProps = sourceProps.map((p, sourceIndex) => ({ ...p, _boardIndex: sourceIndex }));
   let props = allProps.filter((p) => {
     const filter = state.boardFilter;
     if (filter === "all") return true;
@@ -3885,6 +3910,17 @@ function deepDiveIntoBotProp(p) {
   if (!stat || p.sport !== "MLB") return;
 
   state.v2DeepDiveReturn = { scrollY: window.scrollY };
+  const boardStats = p.stats || {};
+  state.boardResearchContext = {
+    player: p.player_name,
+    stat,
+    line: Number(p.line),
+    side: boardStats.side === "under" ? "under" : "over",
+    matchupScore: boardStats.matchup_score,
+    matchupLabel: boardStats.matchup_label,
+    matchupCoverage: boardStats.matchup_coverage,
+    matchupFactors: boardStats.matchup_factors || [],
+  };
   els.v2BackBtn.hidden = false;
 
   const isPitcher = BOT_PITCHER_STATS.has(p.stat_type);

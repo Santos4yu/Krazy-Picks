@@ -19,7 +19,14 @@ from prediction_core import compute_slate, compute_tool  # noqa: E402
 from auth_core import session_with_live_access  # noqa: E402
 
 _CACHE = {}
-_CACHE_SECONDS = 300
+_CACHE_SECONDS = {
+    "weather": 300,
+    "attack": 600,
+    "parks": 1800,
+    "platoon": 900,
+    "bvp": 1800,
+    "strikeouts": 900,
+}
 
 
 class handler(BaseHTTPRequestHandler):
@@ -35,7 +42,8 @@ class handler(BaseHTTPRequestHandler):
             tool = query.get("tool", ["attack"])[0]
             force_refresh = "refresh" in query
             cached = _CACHE.get(tool)
-            if not force_refresh and cached and time.time() - cached[0] < _CACHE_SECONDS:
+            cache_seconds = _CACHE_SECONDS.get(tool, 600)
+            if not force_refresh and cached and time.time() - cached[0] < cache_seconds:
                 result = cached[1]
             else:
                 result = compute_slate() if tool == "attack" else compute_tool(tool)

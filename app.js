@@ -3143,6 +3143,7 @@ function renderSavedGrid() {
 
 const SLATE_BULLPEN_ICON = { ELITE: "🛡️", SOLID: "✓", AVERAGE: "~", WEAK: "💥", UNKNOWN: "?" };
 let slateRequest = null;
+const researchToolCache = new Map();
 
 function requestSlateData(force = false) {
   if (!force && slateRequest) return slateRequest;
@@ -3154,7 +3155,6 @@ function requestSlateData(force = false) {
 }
 
 function wireSlate() {
-  els.slateRefreshBtn.addEventListener("click", () => loadSlate(true));
   const tools = document.querySelectorAll(".tool-tab");
   const labels = {
     attack: "Attack Board — starting-pitcher and bullpen vulnerability, ranked from the batter's side.",
@@ -3164,6 +3164,11 @@ function wireSlate() {
     bvp: "BvP Matchups — career batter-versus-pitcher history, only where the sample is meaningful.",
     strikeouts: "Strikeout Spots — pitcher K skill, opposing lineup K rate, and projected workload."
   };
+  els.slateRefreshBtn.addEventListener("click", () => {
+    const activeTool = document.querySelector(".tool-tab.active")?.dataset.tool || "attack";
+    if (activeTool === "attack") loadSlate(true);
+    else loadResearchTool(activeTool, true);
+  });
   tools.forEach((button) => button.addEventListener("click", () => {
     tools.forEach((item) => item.classList.toggle("active", item === button));
     const tool = button.dataset.tool;
@@ -3172,25 +3177,37 @@ function wireSlate() {
       els.slateRefreshBtn.hidden = false;
       els.slateList.hidden = false;
       els.slateError.hidden = true;
-      loadSlate(true);
+      loadSlate(false);
       return;
     }
+    loadResearchTool(tool, false);
+  }));
+}
+
+async function loadResearchTool(tool, force = false) {
     els.slateList.innerHTML = "";
     els.slateList.hidden = true;
     els.slateEmpty.hidden = true;
     els.slateLoading.hidden = true;
     els.slateError.hidden = false;
     els.slateError.className = "tools-source-note";
-    els.slateError.textContent = "Loading live MLB data…";
-    fetch(`/api/slate?tool=${encodeURIComponent(tool)}&refresh=${Date.now()}`, {cache:"no-store"}).then(async r => {
+    const cached = researchToolCache.get(tool);
+    if (!force && cached) {
+      const rows = cached.entries || [];
+      els.slateError.innerHTML = rows.length ? rows.map(renderToolCard).join("") : `<strong>${escapeHtml(tool)}</strong><span>No qualifying live data is available yet.</span>`;
+      return;
+    }
+    els.slateError.textContent = force ? "Refreshing live MLB data…" : "Loading live MLB data…";
+    const query = force ? `&refresh=${Date.now()}` : "";
+    fetch(`/api/slate?tool=${encodeURIComponent(tool)}${query}`, {cache: force ? "no-store" : "default"}).then(async r => {
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
       return data;
     }).then(data => {
+      researchToolCache.set(tool, data);
       const rows = data.entries || [];
-      els.slateError.innerHTML = rows.length ? rows.map(renderToolCard).join("") : `<strong>${button.textContent}</strong><span>No qualifying live data is available yet. No substitute list is shown.</span>`;
+      els.slateError.innerHTML = rows.length ? rows.map(renderToolCard).join("") : `<strong>${escapeHtml(tool)}</strong><span>No qualifying live data is available yet. No substitute list is shown.</span>`;
     }).catch((err) => { els.slateError.textContent = err.message || "Live MLB data could not be loaded for this tool."; });
-  }));
 }
 
 function renderToolCard(row, index) {

@@ -26,12 +26,14 @@ Supported prop_type values
 """
 
 import io
+import csv
 import sys
 import time
 import json
 import math
 import hashlib
 import logging
+import threading
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -71,6 +73,19 @@ _SESSION.mount("https://", HTTPAdapter(pool_connections=40, pool_maxsize=40))
 
 _SESSION_LAX = requests.Session()
 _SESSION_LAX.mount("https://", _LaxTLSAdapter(pool_connections=40, pool_maxsize=40))
+_THREAD_LOCAL = threading.local()
+_CACHE_IO_LOCK = threading.RLock()
+
+
+def _thread_sessions():
+    """One requests session pair per worker thread; Session is mutable."""
+    if not hasattr(_THREAD_LOCAL, "normal"):
+        normal = requests.Session()
+        normal.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=4))
+        lax = requests.Session()
+        lax.mount("https://", _LaxTLSAdapter(pool_connections=4, pool_maxsize=4))
+        _THREAD_LOCAL.normal, _THREAD_LOCAL.lax = normal, lax
+    return _THREAD_LOCAL.normal, _THREAD_LOCAL.lax
 
 # ── UTF-8 output on Windows (only wrap when run directly) ───────────────────
 if __name__ == "__main__":
@@ -154,14 +169,15 @@ def _get(endpoint: str, params: dict = None, cache_key: str = None) -> Optional[
     """
     if cache_key:
         cache_file = CACHE_DIR / f"{cache_key}.json"
-        if cache_file.exists():
-            try:
-                fresh = (time.time() - cache_file.stat().st_mtime) < _cache_ttl_sec(cache_key)
-            except OSError:
-                fresh = False
-            if fresh:
-                with open(cache_file, encoding="utf-8") as f:
-                    return json.load(f)
+        with _CACHE_IO_LOCK:
+            if cache_file.exists():
+                try:
+                    fresh = (time.time() - cache_file.stat().st_mtime) < _cache_ttl_sec(cache_key)
+                    if fresh:
+                        with open(cache_file, encoding="utf-8") as f:
+                            return json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    pass
 
     _HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -170,19 +186,24 @@ def _get(endpoint: str, params: dict = None, cache_key: str = None) -> Optional[
         "Origin": "https://www.mlb.com",
         "Referer": "https://www.mlb.com/",
     }
+    normal_session, lax_session = _thread_sessions()
     for base in (BASE, BASE_FALLBACK):
         url = f"{base}{endpoint}"
         try:
             time.sleep(REQUEST_DELAY)
             try:
-                r = _SESSION.get(url, params=params or {}, timeout=TIMEOUT, headers=_HEADERS)
+                r = normal_session.get(url, params=params or {}, timeout=TIMEOUT, headers=_HEADERS)
             except (ssl.SSLError, requests.exceptions.SSLError):
-                r = _SESSION_LAX.get(url, params=params or {}, timeout=TIMEOUT, headers=_HEADERS)
+                r = lax_session.get(url, params=params or {}, timeout=TIMEOUT, headers=_HEADERS)
             r.raise_for_status()
             data = r.json()
             if cache_key:
-                with open(CACHE_DIR / f"{cache_key}.json", "w", encoding="utf-8") as f:
-                    json.dump(data, f)
+                cache_file = CACHE_DIR / f"{cache_key}.json"
+                temp_file = cache_file.with_name(f"{cache_file.name}.{threading.get_ident()}.tmp")
+                with _CACHE_IO_LOCK:
+                    with open(temp_file, "w", encoding="utf-8") as f:
+                        json.dump(data, f)
+                    temp_file.replace(cache_file)
             return data
         except requests.exceptions.HTTPError as exc:
             try:
@@ -909,6 +930,74 @@ def get_pitcher_advanced_stats(pitcher_id: int) -> dict:
 
 # ── 4. BvP history ────────────────────────────────────────────────────────────
 
+def get_statcast_bvp_batch(batter_ids: list[int], pitcher_id: int) -> dict[int, dict]:
+    """Exact Statcast-era BvP totals, filtered by both MLB player IDs.
+
+    MLB Stats API's undocumented ``vsPlayer`` endpoint currently ignores the
+    requested batter for some players. Baseball Savant's official Statcast CSV
+    returns pitch rows with explicit batter and pitcher IDs, which lets us
+    validate every row before aggregating it.
+    """
+    ids = sorted({int(x) for x in batter_ids if x})
+    if not ids or not pitcher_id:
+        return {}
+    from vortextime import vortex_day
+    params = [
+        ("all", "true"), ("type", "details"), ("player_type", "batter"),
+        ("group_by", "name"), ("min_pitches", "0"), ("min_results", "0"),
+        ("min_pas", "0"), ("hfGT", "R|"),
+        ("game_date_gt", "2017-01-01"), ("game_date_lt", vortex_day()),
+        ("pitchers_lookup[]", str(int(pitcher_id))),
+    ] + [("batters_lookup[]", str(bid)) for bid in ids]
+    normal_session, _ = _thread_sessions()
+    try:
+        response = normal_session.get(
+            "https://baseballsavant.mlb.com/statcast_search/csv",
+            params=params, timeout=30, headers={"User-Agent": "Mozilla/5.0"},
+        )
+        response.raise_for_status()
+        reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
+    except (requests.RequestException, UnicodeDecodeError):
+        return {}
+
+    terminal = {}
+    for row in reader:
+        try:
+            bid, pid = int(row.get("batter") or 0), int(row.get("pitcher") or 0)
+        except (TypeError, ValueError):
+            continue
+        event = (row.get("events") or "").strip()
+        if bid not in ids or pid != int(pitcher_id) or not event:
+            continue
+        terminal.setdefault(bid, []).append(event)
+
+    hits_events = {"single": 1, "double": 2, "triple": 3, "home_run": 4}
+    non_ab = {"walk", "intent_walk", "hit_by_pitch", "sac_fly", "sac_fly_double_play", "sac_bunt", "catcher_interf"}
+    results = {}
+    for bid, events in terminal.items():
+        pa = len(events)
+        ab = sum(event not in non_ab for event in events)
+        hits = sum(event in hits_events for event in events)
+        tb = sum(hits_events.get(event, 0) for event in events)
+        hr = events.count("home_run")
+        bb = events.count("walk") + events.count("intent_walk")
+        hbp = events.count("hit_by_pitch")
+        sf = events.count("sac_fly") + events.count("sac_fly_double_play")
+        k = events.count("strikeout") + events.count("strikeout_double_play")
+        if ab < 5:
+            continue
+        avg = hits / ab
+        slg = tb / ab
+        obp_den = ab + bb + hbp + sf
+        obp = (hits + bb + hbp) / obp_den if obp_den else 0
+        results[bid] = {
+            "ab": ab, "pa": pa, "hits": hits, "avg": f".{round(avg * 1000):03d}",
+            "ops": f"{obp + slg:.3f}", "hr": hr, "tb": tb, "bb": bb, "k": k,
+            "sample": "large sample" if ab >= 20 else "moderate sample" if ab >= 10 else "small sample",
+            "source": "MLB Baseball Savant Statcast (2017-present)",
+        }
+    return results
+
 def get_bvp_history(batter_id: int, pitcher_id: int) -> dict:
     """
     Pull career head-to-head stats between a specific batter and pitcher.
@@ -921,7 +1010,7 @@ def get_bvp_history(batter_id: int, pitcher_id: int) -> dict:
         "group":             "hitting",
         "opposingPlayerId":  pitcher_id,
         "sportId":           1,
-    }, cache_key=f"bvp_{batter_id}_vs_{pitcher_id}")
+    }, cache_key=f"bvp_v2_{batter_id}_vs_{pitcher_id}")
 
     if not data:
         return {"error": "BvP fetch failed"}

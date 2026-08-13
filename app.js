@@ -3193,10 +3193,10 @@ function wireSlate() {
   }));
 }
 
-function renderToolCard(row) {
+function renderToolCard(row, index) {
   const evidence = (row.evidence || []).map(item => `<div class="tool-evidence"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.detail)}</small></div>`).join("");
   return `<article class="tool-result tool-${escapeHtml(row.tone || "neutral")}">
-    <header><div><span class="tool-kicker">${escapeHtml(row.badge || "Live research")}</span><strong>${escapeHtml(row.title)}</strong></div></header>
+    <header><div><span class="tool-kicker">#${String(index + 1).padStart(2, "0")} · ${escapeHtml(row.badge || "Live research")}</span><strong>${escapeHtml(row.title)}</strong></div></header>
     <p class="tool-summary">${escapeHtml(row.summary || row.detail || "")}</p>
     <div class="tool-evidence-grid">${evidence}</div>
     ${row.caution ? `<p class="tool-caution">${escapeHtml(row.caution)}</p>` : ""}

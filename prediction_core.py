@@ -330,16 +330,17 @@ def _team_k_context(team_id):
 
 
 def _bvp_split(batter_id, pitcher_id):
-    """Return the canonical career BvP line used by the analysis engine."""
-    bvp = _safe(stats_mlb.get_bvp_history, batter_id, pitcher_id, default={}) or {}
+    """Return exact ID-validated Statcast-era BvP totals."""
+    bvp = (_safe(stats_mlb.get_statcast_bvp_batch, [batter_id], pitcher_id, default={}) or {}).get(batter_id, {})
     if bvp.get("error") or int(bvp.get("ab", 0) or 0) < 5:
         return {}
     return {
         "ab": int(bvp.get("ab", 0) or 0), "hits": int(bvp.get("hits", 0) or 0),
-        "hr": int(bvp.get("hr", 0) or 0), "rbi": int(bvp.get("rbi", 0) or 0),
+        "hr": int(bvp.get("hr", 0) or 0),
         "tb": int(bvp.get("tb", 0) or 0), "bb": int(bvp.get("bb", 0) or 0),
         "k": int(bvp.get("k", 0) or 0), "avg": bvp.get("avg", ".000"),
         "ops": bvp.get("ops", ".000"), "sample": bvp.get("sample", "small sample"),
+        "source": bvp.get("source", "MLB Baseball Savant Statcast"),
     }
 
 
@@ -362,35 +363,43 @@ def _compute_bvp_tool(schedule, lineups, today):
                 if hitter.get("id") and hitter.get("fullName"):
                     jobs.append((hitter, pitcher_name, pitcher_id, confirmed))
 
+    groups = {}
+    for hitter, pitcher_name, pitcher_id, confirmed in jobs:
+        group = groups.setdefault(pitcher_id, {"pitcher_name": pitcher_name, "hitters": []})
+        group["hitters"].append((hitter, confirmed))
+
     rows = []
-    with ThreadPoolExecutor(max_workers=32) as pool:
-        futures = [
-            (pool.submit(_bvp_split, hitter["id"], pitcher_id), hitter, pitcher_name, confirmed)
-            for hitter, pitcher_name, pitcher_id, confirmed in jobs
-        ]
-        for future, hitter, pitcher_name, confirmed in futures:
-            split = future.result() or {}
-            if not split:
-                continue
-            avg, ops, ab = _number(split["avg"]), _number(split.get("ops")), split["ab"]
-            reliability = min(ab / 20.0, 1.0)
-            quality = avg * .45 + ops * .35 + min(split["hr"] / max(ab, 1), .15) * 1.5
-            score = quality * (.45 + .55 * reliability)
-            tier = "Elite BvP" if ab >= 10 and (avg >= .350 or ops >= 1.000) else "Strong BvP" if ab >= 8 and (avg >= .300 or ops >= .850) else "Career BvP sample"
-            lineup_note = "Confirmed batting order." if confirmed else "Active-roster candidate; batting order is not posted yet."
-            rows.append({
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = []
+        for pitcher_id, group in groups.items():
+            batter_ids = [hitter["id"] for hitter, _ in group["hitters"]]
+            futures.append((pool.submit(stats_mlb.get_statcast_bvp_batch, batter_ids, pitcher_id), group))
+        for future, group in futures:
+            batch = future.result() or {}
+            pitcher_name = group["pitcher_name"]
+            for hitter, confirmed in group["hitters"]:
+                split = batch.get(hitter["id"], {})
+                if not split:
+                    continue
+                avg, ops, ab = _number(split["avg"]), _number(split.get("ops")), split["ab"]
+                reliability = min(ab / 20.0, 1.0)
+                quality = avg * .45 + ops * .35 + min(split["hr"] / max(ab, 1), .15) * 1.5
+                score = quality * (.45 + .55 * reliability)
+                tier = "Elite BvP" if ab >= 10 and (avg >= .350 or ops >= 1.000) else "Strong BvP" if ab >= 8 and (avg >= .300 or ops >= .850) else "Career BvP sample"
+                lineup_note = "Confirmed batting order." if confirmed else "Active-roster candidate; batting order is not posted yet."
+                rows.append({
                 "title": f"{hitter['fullName']} vs {pitcher_name}", "badge": tier,
                 "tone": "good" if tier != "Career BvP sample" else "neutral",
                 "summary": f"{split['hits']}-for-{ab} ({split['avg']} AVG, {split['ops']} OPS) against this pitcher.",
                 "evidence": [
-                    {"label": "Career line", "value": f"{split['hits']}-for-{ab}", "detail": split.get("sample", "Career head-to-head")},
-                    {"label": "AVG / OPS", "value": f"{split['avg']} / {split['ops']}", "detail": "Career head-to-head"},
-                    {"label": "Production", "value": f"{split['hr']} HR · {split['rbi']} RBI", "detail": f"{split['tb']} total bases"},
+                    {"label": "Statcast line", "value": f"{split['hits']}-for-{ab}", "detail": split.get("sample", "2017-present")},
+                    {"label": "AVG / OPS", "value": f"{split['avg']} / {split['ops']}", "detail": "MLB Statcast, 2017-present"},
+                    {"label": "Production", "value": f"{split['hr']} HR · {split['tb']} TB", "detail": "Exact Statcast-era matchup totals"},
                     {"label": "Discipline", "value": f"{split['bb']} BB · {split['k']} K", "detail": "Career matchup totals"},
                 ],
-                "caution": f"{lineup_note} BvP is confirmed with handedness, arsenal and current form before it becomes a play.",
+                "caution": f"{lineup_note} Source: MLB Baseball Savant pitch-level data, ID-validated, 2017-present. BvP is descriptive, not a guarantee.",
                 "score": round(score, 4),
-            })
+                })
     rows.sort(key=lambda row: (row["badge"] != "Career BvP sample", row["score"]), reverse=True)
     return {"date": today, "entries": rows[:16], "tool": "bvp"}
 
@@ -438,7 +447,7 @@ def _compute_platoon_tool(schedule, lineups, today):
                     {"label": "Sample", "value": f"{pa} PA", "detail": "Season platoon split"},
                     {"label": "Power", "value": f"{split.get('hr', 0)} HR", "detail": f"{split.get('rbi', 0)} RBI"},
                 ],
-                "caution": f"{lineup_note} Handedness is one input, not a complete play signal.", "score": round(ops, 3),
+                "caution": f"{lineup_note} Source: official MLB Stats API current-season handedness splits. This is context, not a guarantee.", "score": round(ops, 3),
             })
     rows.sort(key=lambda row: row["score"], reverse=True)
     return {"date": today, "entries": rows[:16], "tool": "platoon"}
@@ -468,7 +477,7 @@ def compute_tool(tool: str) -> dict:
         if tool == "parks":
             delta = round((park - 1) * 100)
             read = "Hitter-friendly" if park >= 1.03 else "Pitcher-friendly" if park <= .97 else "Neutral environment"
-            rich_rows.append({"title": label, "badge": read, "tone": "good" if delta > 0 else "risk" if delta < 0 else "neutral", "summary": f"{game.get('home_team_name', home)} plays {abs(delta)}% {'above' if delta >= 0 else 'below'} the neutral run baseline.", "evidence": [{"label": "Park factor", "value": f"{park:.2f}x", "detail": "Season venue run environment"}, {"label": "Read", "value": read, "detail": "Park only, not a player recommendation"}], "score": park})
+            rich_rows.append({"title": label, "badge": read, "tone": "good" if delta > 0 else "risk" if delta < 0 else "neutral", "summary": f"{game.get('home_team_name', home)} plays {abs(delta)}% {'above' if delta >= 0 else 'below'} the neutral run baseline.", "evidence": [{"label": "Park factor", "value": f"{park:.2f}x", "detail": "Configured venue run factor"}, {"label": "Read", "value": read, "detail": "Park only, not a player recommendation"}, {"label": "Source", "value": "Venue model", "detail": "VORTEX park-factor table"}], "score": park})
         elif tool == "weather":
             weather = _safe(stats_mlb.get_game_weather, home, game.get("game_utc", ""), game_pk, default={}) or {}
             if not weather or weather.get("error"):
@@ -481,7 +490,9 @@ def compute_tool(tool: str) -> dict:
                 pitcher = weather.get("hitter_friendly") is False or (temp is not None and _number(temp) <= 45)
                 badge, tone = ("Hitter lean", "good") if hitter else (("Pitcher lean", "risk") if pitcher else ("Mixed conditions", "neutral"))
                 summary = f"{wind:.0f} mph {effect}" + (f" with a {temp:.0f} degree game-time forecast." if temp is not None else ".")
-            rich_rows.append({"title": label, "badge": badge, "tone": tone, "summary": summary, "evidence": [{"label": "Wind", "value": "Indoor" if weather.get("dome") else f"{_number(weather.get('speed_mph')):.0f} mph", "detail": weather.get("effect") or "Roof-controlled"}, {"label": "Temperature", "value": "-" if weather.get("temp_f") is None else f"{_number(weather.get('temp_f')):.0f} F", "detail": "Game-time forecast"}, {"label": "Park", "value": f"{park:.2f}x", "detail": "Season venue context"}], "score": abs(_number(weather.get("speed_mph"))) + abs(park - 1) * 20})
+            weather_direction = 1 if tone == "good" else -1 if tone == "risk" else 0
+            weather_score = (park - 1) * 20 + weather_direction * (1 + _number(weather.get("speed_mph")) / 10)
+            rich_rows.append({"title": label, "badge": badge, "tone": tone, "summary": summary, "evidence": [{"label": "Wind", "value": "Indoor" if weather.get("dome") else f"{_number(weather.get('speed_mph')):.0f} mph", "detail": weather.get("effect") or "Roof-controlled"}, {"label": "Temperature", "value": "-" if weather.get("temp_f") is None else f"{_number(weather.get('temp_f')):.0f} F", "detail": "Game-time forecast"}, {"label": "Park", "value": f"{park:.2f}x", "detail": "Venue context"}, {"label": "Source", "value": weather.get("source", "Open-Meteo"), "detail": "MLB venue/roof plus game-time forecast"}], "score": weather_score})
         elif tool == "strikeouts":
             for pitcher_key, pitcher_id_key, opponent_id_key, opponent in (("home_pitcher", "home_pitcher_id", "away_team_id", away), ("away_pitcher", "away_pitcher_id", "home_team_id", home)):
                 pitcher_name = game.get(pitcher_key)

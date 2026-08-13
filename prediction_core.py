@@ -216,7 +216,9 @@ def compute_slate() -> dict:
                 if not p_name or not opp_team_id:
                     continue
                 f_pitcher = pool.submit(_safe, stats_mlb.get_pitcher_metrics, p_name, default={})
-                f_bullpen = pool.submit(_safe, stats_mlb.get_team_bullpen, opp_team_id, default={})
+                # The relevant bullpen is the one behind this pitcher, not the
+                # opponent's bullpen. The old mapping inverted this context.
+                f_bullpen = pool.submit(_safe, stats_mlb.get_team_bullpen, team_id, default={})
                 jobs.append({
                     "pitcher_name": p_name,
                     "team_id": team_id,
@@ -328,20 +330,118 @@ def _team_k_context(team_id):
 
 
 def _bvp_split(batter_id, pitcher_id):
-    data = _safe(stats_mlb._get, f"/people/{batter_id}", {
-        "hydrate": f"stats(group=[hitting],type=[vsPlayer],opposingPlayerId={pitcher_id},sportId=1)",
-    }, default={}) or {}
-    person = (data.get("people") or [{}])[0]
-    stats = person.get("stats") or []
-    splits = [split for group in stats for split in (group.get("splits") or [])]
-    if not splits:
+    """Return the canonical career BvP line used by the analysis engine."""
+    bvp = _safe(stats_mlb.get_bvp_history, batter_id, pitcher_id, default={}) or {}
+    if bvp.get("error") or int(bvp.get("ab", 0) or 0) < 5:
         return {}
-    def total(key):
-        return sum(int((split.get("stat") or {}).get(key, 0) or 0) for split in splits)
-    ab, hits = total("atBats"), total("hits")
-    if ab < 5:
-        return {}
-    return {"ab": ab, "hits": hits, "hr": total("homeRuns"), "bb": total("baseOnBalls"), "k": total("strikeOuts"), "avg": f"{hits / ab:.3f}"}
+    return {
+        "ab": int(bvp.get("ab", 0) or 0), "hits": int(bvp.get("hits", 0) or 0),
+        "hr": int(bvp.get("hr", 0) or 0), "rbi": int(bvp.get("rbi", 0) or 0),
+        "tb": int(bvp.get("tb", 0) or 0), "bb": int(bvp.get("bb", 0) or 0),
+        "k": int(bvp.get("k", 0) or 0), "avg": bvp.get("avg", ".000"),
+        "ops": bvp.get("ops", ".000"), "sample": bvp.get("sample", "small sample"),
+    }
+
+
+def _compute_bvp_tool(schedule, lineups, today):
+    """Build the full-slate BvP board concurrently to fit serverless limits."""
+    jobs = []
+    for game_pk, game in schedule.items():
+        for pitcher_key, pitcher_id_key, hitters_key, team_id_key in (
+            ("away_pitcher", "away_pitcher_id", "home", "home_team_id"),
+            ("home_pitcher", "home_pitcher_id", "away", "away_team_id"),
+        ):
+            pitcher_name, pitcher_id = game.get(pitcher_key), game.get(pitcher_id_key)
+            if not pitcher_name or not pitcher_id:
+                continue
+            hitters = _lineup_for_game(lineups, game_pk, hitters_key)
+            confirmed = bool(hitters)
+            if not hitters:
+                hitters = _active_hitters(game.get(team_id_key))[:9]
+            for hitter in hitters:
+                if hitter.get("id") and hitter.get("fullName"):
+                    jobs.append((hitter, pitcher_name, pitcher_id, confirmed))
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        futures = [
+            (pool.submit(_bvp_split, hitter["id"], pitcher_id), hitter, pitcher_name, confirmed)
+            for hitter, pitcher_name, pitcher_id, confirmed in jobs
+        ]
+        for future, hitter, pitcher_name, confirmed in futures:
+            split = future.result() or {}
+            if not split:
+                continue
+            avg, ops, ab = _number(split["avg"]), _number(split.get("ops")), split["ab"]
+            reliability = min(ab / 20.0, 1.0)
+            quality = avg * .45 + ops * .35 + min(split["hr"] / max(ab, 1), .15) * 1.5
+            score = quality * (.45 + .55 * reliability)
+            tier = "Elite BvP" if ab >= 10 and (avg >= .350 or ops >= 1.000) else "Strong BvP" if ab >= 8 and (avg >= .300 or ops >= .850) else "Career BvP sample"
+            lineup_note = "Confirmed batting order." if confirmed else "Active-roster candidate; batting order is not posted yet."
+            rows.append({
+                "title": f"{hitter['fullName']} vs {pitcher_name}", "badge": tier,
+                "tone": "good" if tier != "Career BvP sample" else "neutral",
+                "summary": f"{split['hits']}-for-{ab} ({split['avg']} AVG, {split['ops']} OPS) against this pitcher.",
+                "evidence": [
+                    {"label": "Career line", "value": f"{split['hits']}-for-{ab}", "detail": split.get("sample", "Career head-to-head")},
+                    {"label": "AVG / OPS", "value": f"{split['avg']} / {split['ops']}", "detail": "Career head-to-head"},
+                    {"label": "Production", "value": f"{split['hr']} HR · {split['rbi']} RBI", "detail": f"{split['tb']} total bases"},
+                    {"label": "Discipline", "value": f"{split['bb']} BB · {split['k']} K", "detail": "Career matchup totals"},
+                ],
+                "caution": f"{lineup_note} BvP is confirmed with handedness, arsenal and current form before it becomes a play.",
+                "score": round(score, 4),
+            })
+    rows.sort(key=lambda row: (row["badge"] != "Career BvP sample", row["score"]), reverse=True)
+    return {"date": today, "entries": rows[:16], "tool": "bvp"}
+
+
+def _compute_platoon_tool(schedule, lineups, today):
+    """Rank confirmed hitters with strong current-season platoon production."""
+    matchups = []
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        pitcher_jobs = []
+        for game_pk, game in schedule.items():
+            for pitcher_key, hitters_key, team_id_key in (
+                ("away_pitcher", "home", "home_team_id"),
+                ("home_pitcher", "away", "away_team_id"),
+            ):
+                name = game.get(pitcher_key)
+                if name:
+                    pitcher_jobs.append((pool.submit(_safe, stats_mlb.get_pitcher_metrics, name, default={}), game_pk, game, name, hitters_key, team_id_key))
+        for future, game_pk, game, name, hitters_key, team_id_key in pitcher_jobs:
+            pitcher = future.result() or {}
+            hand = pitcher.get("hand")
+            if hand not in {"L", "R"}:
+                continue
+            hitters = _lineup_for_game(lineups, game_pk, hitters_key)
+            confirmed = bool(hitters)
+            if not hitters:
+                hitters = _active_hitters(game.get(team_id_key))
+            matchups.extend((h, name, hand, confirmed) for h in hitters if h.get("id") and h.get("fullName"))
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        jobs = [(pool.submit(_safe, stats_mlb.get_batter_hand_splits, h["id"], hand, default={}), h, name, hand, confirmed) for h, name, hand, confirmed in matchups]
+        for future, hitter, pitcher_name, hand, confirmed in jobs:
+            split = (future.result() or {}).get(hand, {})
+            ops, pa = _number(split.get("ops")), int(split.get("pa", 0) or 0)
+            if pa < 20 or ops < .760:
+                continue
+            avg = split.get("avg", ".---")
+            lineup_note = "Confirmed batting order." if confirmed else "Active-roster candidate; batting order is not posted yet."
+            rows.append({
+                "title": f"{hitter['fullName']} vs {pitcher_name}", "badge": f"vs {hand}HP edge", "tone": "good",
+                "summary": f"{hitter['fullName']} has a {split.get('ops', '.---')} OPS and {avg} AVG in {pa} PA against {hand}-handed pitching this season.",
+                "evidence": [
+                    {"label": "Split AVG", "value": avg, "detail": f"vs {hand}-handed pitching"},
+                    {"label": "Split OPS", "value": split.get("ops", ".---"), "detail": "Current season"},
+                    {"label": "Sample", "value": f"{pa} PA", "detail": "Season platoon split"},
+                    {"label": "Power", "value": f"{split.get('hr', 0)} HR", "detail": f"{split.get('rbi', 0)} RBI"},
+                ],
+                "caution": f"{lineup_note} Handedness is one input, not a complete play signal.", "score": round(ops, 3),
+            })
+    rows.sort(key=lambda row: row["score"], reverse=True)
+    return {"date": today, "entries": rows[:16], "tool": "platoon"}
 
 
 def compute_tool(tool: str) -> dict:
@@ -355,6 +455,11 @@ def compute_tool(tool: str) -> dict:
         return {"date": today, "entries": [], "tool": tool}
 
     lineups = _live_lineups(today) if tool in {"platoon", "bvp"} else {}
+    if tool == "bvp":
+        return _compute_bvp_tool(schedule, lineups, today)
+    if tool == "platoon":
+        return _compute_platoon_tool(schedule, lineups, today)
+    all_team_k = stats_mlb.get_all_teams_k_rate() if tool == "strikeouts" else {}
     rich_rows = []
     for game_pk, game in schedule.items():
         away, home = game.get("away_abbr", "?"), game.get("home_abbr", "?")
@@ -385,19 +490,35 @@ def compute_tool(tool: str) -> dict:
                 pitcher = _safe(stats_mlb.get_pitcher_metrics, pitcher_name, default={}) or {}
                 if pitcher.get("error"):
                     continue
-                opponent_k = _team_k_context(game.get(opponent_id_key)).get("k_rate")
+                opponent_id = game.get(opponent_id_key)
+                opponent_ctx = all_team_k.get(opponent_id, {}) or {}
+                opponent_k = opponent_ctx.get("k_pct")
+                opponent_rank = opponent_ctx.get("rank")
+                hand = pitcher.get("hand")
+                hand_ctx = (_safe(stats_mlb.get_team_k_rate_vs_hand, opponent_id, hand, default={}) or {}) if hand in {"L", "R"} else {}
+                hand_k = hand_ctx.get("k_pct")
                 k9 = _number(pitcher.get("k_per_9"))
                 if k9 <= 0:
                     continue
+                innings = _number(pitcher.get("innings_pitched"))
                 recent = pitcher.get("last_5_starts") or []
                 recent_ks = [int(start.get("k", 0) or 0) for start in recent[:5]]
                 recent_ip = [_number(start.get("ip")) for start in recent[:3]]
                 avg_k = round(sum(recent_ks) / len(recent_ks), 1) if recent_ks else None
                 avg_ip = round(sum(recent_ip) / len(recent_ip), 1) if recent_ip else None
-                score = k9 + ((opponent_k or 22) - 22) / 4
+                matchup_k = hand_k if hand_k is not None else opponent_k
+                # Regress small pitching samples toward league-average K skill;
+                # otherwise a call-up with a few relief innings can incorrectly
+                # lead the board with an unsustainable K/9.
+                sample_weight = min(innings / 50.0, 1.0)
+                stable_k9 = 8.5 + (k9 - 8.5) * sample_weight
+                score = stable_k9 + ((matchup_k or 22) - 22) / 4
+                if not recent_ks:
+                    score -= 1.0
                 badge = "Strong opportunity" if score >= 9.5 else "Watch matchup" if score >= 8 else "Lower ceiling"
                 caution = "Recent workload gap: projected innings may be less reliable." if pitcher.get("workload_risk") else ("Opponent makes frequent contact; matchup limits the ceiling." if opponent_k is not None and opponent_k < 20 else "No line is used here; this is context, not a wager signal.")
-                rich_rows.append({"title": f"{pitcher.get('name') or pitcher_name} vs {opponent}", "badge": badge, "tone": "good" if score >= 9.5 else "neutral" if score >= 8 else "risk", "summary": f"Season K skill is {k9:.1f} K/9" + (f"; opponent K rate is {opponent_k:.1f}%." if opponent_k is not None else "."), "evidence": [{"label": "Pitcher K/9", "value": f"{k9:.1f}", "detail": f"ERA {_number(pitcher.get('era')):.2f}"}, {"label": "Opponent K rate", "value": "-" if opponent_k is None else f"{opponent_k:.1f}%", "detail": "Season team hitting sample"}, {"label": "Recent form", "value": "-" if avg_k is None else f"{avg_k:.1f} K", "detail": "Average over last five appearances"}, {"label": "Recent workload", "value": "-" if avg_ip is None else f"{avg_ip:.1f} IP", "detail": "Average over last three appearances"}], "caution": caution, "score": score})
+                rank_detail = "Overall rank unavailable" if opponent_rank is None else f"#{opponent_rank}/30 hardest to strike out"
+                rich_rows.append({"title": f"{pitcher.get('name') or pitcher_name} vs {opponent}", "badge": badge, "tone": "good" if score >= 9.5 else "neutral" if score >= 8 else "risk", "summary": f"Season K skill is {k9:.1f} K/9" + (f"; matchup K rate is {matchup_k:.1f}%." if matchup_k is not None else "."), "evidence": [{"label": "Pitcher K/9", "value": f"{k9:.1f}", "detail": f"{innings:.1f} IP · ERA {_number(pitcher.get('era')):.2f}"}, {"label": "Opponent K rate", "value": "-" if opponent_k is None else f"{opponent_k:.1f}%", "detail": rank_detail}, {"label": f"Vs {hand or '?'}HP", "value": "-" if hand_k is None else f"{hand_k:.1f}%", "detail": "Handedness-specific team K rate"}, {"label": "Recent form", "value": "-" if avg_k is None else f"{avg_k:.1f} K", "detail": "Average over last five appearances"}, {"label": "Recent workload", "value": "-" if avg_ip is None else f"{avg_ip:.1f} IP", "detail": "Average over last three appearances"}], "caution": caution, "score": score})
         elif tool in {"platoon", "bvp"}:
             game_rows = []
             for pitcher_key, pitcher_id_key, hitters_key in (("away_pitcher", "away_pitcher_id", "home"), ("home_pitcher", "home_pitcher_id", "away")):
@@ -408,16 +529,16 @@ def compute_tool(tool: str) -> dict:
                 hand = pitcher.get("hand")
                 if hand not in {"L", "R"}:
                     continue
-                # BvP is a separate live request per hitter. Keep it to the top
-                # of each confirmed order so this remains a responsive research
-                # tool rather than issuing hundreds of requests at page load.
                 hitters = _lineup_for_game(lineups, game_pk, hitters_key)
                 confirmed_lineup = bool(hitters)
                 if not hitters:
                     team_id = game.get("home_team_id") if hitters_key == "home" else game.get("away_team_id")
                     hitters = _active_hitters(team_id)
+                # A BvP board must inspect the full batting order. Before the
+                # lineup posts, cap the active-roster fallback at nine and label
+                # every result unconfirmed.
                 if tool == "bvp":
-                    hitters = hitters[:3]
+                    hitters = hitters[:9]
                 for hitter in hitters:
                     hitter_id, hitter_name = hitter.get("id"), hitter.get("fullName")
                     if not hitter_id or not hitter_name:
@@ -431,9 +552,16 @@ def compute_tool(tool: str) -> dict:
                     else:
                         split = _bvp_split(hitter_id, pitcher_id)
                         if split:
-                            avg = _number(split["avg"])
+                            avg, ops, ab = _number(split["avg"]), _number(split.get("ops")), split["ab"]
+                            # Shrink tiny career samples toward league average so
+                            # a 3-for-5 line never outranks sustained production.
+                            reliability = min(ab / 20.0, 1.0)
+                            quality = ((avg * .45) + (ops * .35) + (min(split["hr"] / max(ab, 1), .15) * 1.5))
+                            bvp_score = quality * (.45 + .55 * reliability)
                             lineup_note = "Confirmed batting order." if confirmed_lineup else "Active-roster candidate; batting order is not posted yet."
-                            game_rows.append((avg + split["ab"] / 1000, {"title": f"{hitter_name} vs {pitcher_name}", "badge": "Career BvP sample", "tone": "good" if avg >= .300 else "neutral", "summary": f"{split['hits']}-for-{split['ab']} ({split['avg']}) in documented at-bats against this pitcher.", "evidence": [{"label": "Career line", "value": f"{split['hits']}-{split['ab']}", "detail": "Hits-at bats vs this pitcher"}, {"label": "Average", "value": split["avg"], "detail": "Career head-to-head"}, {"label": "Extra-base", "value": f"{split['hr']} HR", "detail": f"{split['bb']} BB, {split['k']} K"}], "caution": f"{lineup_note} Small BvP samples are descriptive, not predictive on their own.", "score": avg}))
+                            tier = "Elite BvP" if ab >= 10 and (avg >= .350 or ops >= 1.000) else "Strong BvP" if ab >= 8 and (avg >= .300 or ops >= .850) else "Career BvP sample"
+                            tone = "good" if tier != "Career BvP sample" else "neutral"
+                            game_rows.append((bvp_score, {"title": f"{hitter_name} vs {pitcher_name}", "badge": tier, "tone": tone, "summary": f"{split['hits']}-for-{ab} ({split['avg']} AVG, {split['ops']} OPS) against this pitcher.", "evidence": [{"label": "Career line", "value": f"{split['hits']}-for-{ab}", "detail": split.get("sample", "Career head-to-head")}, {"label": "AVG / OPS", "value": f"{split['avg']} / {split['ops']}", "detail": "Career head-to-head"}, {"label": "Production", "value": f"{split['hr']} HR · {split['rbi']} RBI", "detail": f"{split['tb']} total bases"}, {"label": "Discipline", "value": f"{split['bb']} BB · {split['k']} K", "detail": "Career matchup totals"}], "caution": f"{lineup_note} BvP is confirmed with handedness, arsenal and current form before it becomes a play.", "score": round(bvp_score, 4)}))
             rich_rows.extend(entry for _, entry in sorted(game_rows, key=lambda item: item[0], reverse=True)[:10])
     rich_rows.sort(key=lambda row: row.get("score", 0), reverse=True)
     return {"date": today, "entries": rich_rows[:16], "tool": tool}

@@ -3168,26 +3168,6 @@ function wireSlate() {
     tools.forEach((item) => item.classList.toggle("active", item === button));
     const tool = button.dataset.tool;
     els.slateDate.textContent = labels[tool] || labels.attack;
-    if (tool === "strikeouts") {
-      state.boardFilter = "strikeouts";
-      const strikeoutFilter = els.boardFilterRow?.querySelector('[data-board-filter="strikeouts"]');
-      els.boardFilterRow?.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === strikeoutFilter));
-      switchTab("v2", document.querySelector('.tab-btn[data-tab="v2"]'));
-      loadV2Board(true);
-      return;
-    }
-    if (tool !== "attack") {
-      els.slateRefreshBtn.hidden = true;
-      els.slateList.innerHTML = "";
-      els.slateList.hidden = true;
-      els.slateEmpty.hidden = true;
-      els.slateLoading.hidden = true;
-      els.slateError.hidden = false;
-      els.slateError.className = "tools-coming-soon";
-      const title = button.childNodes[0]?.textContent?.trim() || "New tool";
-      els.slateError.innerHTML = `<img class="coming-soon-logo" src="${comingSoonLogoSrc}" alt="Krazy Picks"><span class="coming-kicker">KRAZY PICKS LAB</span><strong>${escapeHtml(title)}</strong><p>This research module is coming soon.</p><small>Attack Board is live now and remains fully available.</small>`;
-      return;
-    }
     if (tool === "attack") {
       els.slateRefreshBtn.hidden = false;
       els.slateList.hidden = false;
@@ -3202,10 +3182,14 @@ function wireSlate() {
     els.slateError.hidden = false;
     els.slateError.className = "tools-source-note";
     els.slateError.textContent = "Loading live MLB data…";
-    fetch(`/api/slate?tool=${encodeURIComponent(tool)}`, {cache:"no-store"}).then(r => r.json()).then(data => {
+    fetch(`/api/slate?tool=${encodeURIComponent(tool)}&refresh=${Date.now()}`, {cache:"no-store"}).then(async r => {
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+      return data;
+    }).then(data => {
       const rows = data.entries || [];
       els.slateError.innerHTML = rows.length ? rows.map(renderToolCard).join("") : `<strong>${button.textContent}</strong><span>No qualifying live data is available yet. No substitute list is shown.</span>`;
-    }).catch(() => { els.slateError.textContent = "Live MLB data could not be loaded for this tool."; });
+    }).catch((err) => { els.slateError.textContent = err.message || "Live MLB data could not be loaded for this tool."; });
   }));
 }
 

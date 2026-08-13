@@ -3144,6 +3144,9 @@ function renderSavedGrid() {
 const SLATE_BULLPEN_ICON = { ELITE: "🛡️", SOLID: "✓", AVERAGE: "~", WEAK: "💥", UNKNOWN: "?" };
 let slateRequest = null;
 const researchToolCache = new Map();
+let activeResearchTool = "attack";
+let toolRenderToken = 0;
+let slateDataCache = null;
 
 function requestSlateData(force = false) {
   if (!force && slateRequest) return slateRequest;
@@ -3166,25 +3169,29 @@ function wireSlate() {
   };
   els.slateRefreshBtn.addEventListener("click", () => {
     const activeTool = document.querySelector(".tool-tab.active")?.dataset.tool || "attack";
-    if (activeTool === "attack") loadSlate(true);
-    else loadResearchTool(activeTool, true);
+    activeResearchTool = activeTool;
+    const token = ++toolRenderToken;
+    if (activeTool === "attack") loadSlate(true, token);
+    else loadResearchTool(activeTool, true, token);
   });
   tools.forEach((button) => button.addEventListener("click", () => {
     tools.forEach((item) => item.classList.toggle("active", item === button));
     const tool = button.dataset.tool;
+    activeResearchTool = tool;
+    const token = ++toolRenderToken;
     els.slateDate.textContent = labels[tool] || labels.attack;
     if (tool === "attack") {
       els.slateRefreshBtn.hidden = false;
       els.slateList.hidden = false;
       els.slateError.hidden = true;
-      loadSlate(false);
+      loadSlate(false, token);
       return;
     }
-    loadResearchTool(tool, false);
+    loadResearchTool(tool, false, token);
   }));
 }
 
-async function loadResearchTool(tool, force = false) {
+async function loadResearchTool(tool, force = false, token = toolRenderToken) {
     els.slateList.innerHTML = "";
     els.slateList.hidden = true;
     els.slateEmpty.hidden = true;
@@ -3193,6 +3200,7 @@ async function loadResearchTool(tool, force = false) {
     els.slateError.className = "tools-source-note";
     const cached = researchToolCache.get(tool);
     if (!force && cached) {
+      if (token !== toolRenderToken || activeResearchTool !== tool) return;
       const rows = cached.entries || [];
       els.slateError.innerHTML = rows.length ? rows.map(renderToolCard).join("") : `<strong>${escapeHtml(tool)}</strong><span>No qualifying live data is available yet.</span>`;
       return;
@@ -3205,9 +3213,13 @@ async function loadResearchTool(tool, force = false) {
       return data;
     }).then(data => {
       researchToolCache.set(tool, data);
+      if (token !== toolRenderToken || activeResearchTool !== tool) return;
       const rows = data.entries || [];
       els.slateError.innerHTML = rows.length ? rows.map(renderToolCard).join("") : `<strong>${escapeHtml(tool)}</strong><span>No qualifying live data is available yet. No substitute list is shown.</span>`;
-    }).catch((err) => { els.slateError.textContent = err.message || "Live MLB data could not be loaded for this tool."; });
+    }).catch((err) => {
+      if (token !== toolRenderToken || activeResearchTool !== tool) return;
+      els.slateError.textContent = err.message || "Live MLB data could not be loaded for this tool.";
+    });
 }
 
 function renderToolCard(row, index) {
@@ -3220,8 +3232,11 @@ function renderToolCard(row, index) {
   </article>`;
 }
 
-async function loadSlate(force = false) {
-  if (state.slateLoaded && !force) return;
+async function loadSlate(force = false, token = toolRenderToken) {
+  if (state.slateLoaded && !force && slateDataCache) {
+    if (token === toolRenderToken && activeResearchTool === "attack") renderSlate(slateDataCache);
+    return;
+  }
 
   els.slateLoading.hidden = false;
   els.slateEmpty.hidden = true;
@@ -3236,6 +3251,7 @@ async function loadSlate(force = false) {
 
   try {
     const { res, data } = await requestSlateData(force);
+    if (token !== toolRenderToken || activeResearchTool !== "attack") return;
     els.slateLoading.hidden = true;
 
     if (!res.ok || data.error) {
@@ -3246,8 +3262,10 @@ async function loadSlate(force = false) {
     }
 
     state.slateLoaded = true;
+    slateDataCache = data;
     renderSlate(data);
   } catch (err) {
+    if (token !== toolRenderToken || activeResearchTool !== "attack") return;
     els.slateLoading.hidden = true;
     els.slateList.innerHTML = "";
     els.slateError.textContent = err.message || "Failed to load the slate.";

@@ -182,7 +182,7 @@ async function init() {
     state.props = data.props || [];
   } catch (err) {
     console.error(err);
-    els.emptyState.textContent = `Couldn't load predictions.json — ${err.message}`;
+    els.emptyState.innerHTML = `<span class="state-orbit" aria-hidden="true"><i></i></span><span class="state-copy"><strong>Research feed is reconnecting</strong><small>Player analysis is temporarily unavailable. KRAZY PICKS will retry when the feed responds.</small></span>`;
     state.props = [];
   }
 
@@ -595,6 +595,12 @@ function switchTab(tab) {
   els.panelAdmin.hidden = tab !== "admin";
   els.panelSaved.hidden = tab !== "saved";
   els.parlayBar.hidden = tab !== "saved" || state.parlaySelection.size === 0;
+
+  const activePanel = document.querySelector(`.tab-panel:not([hidden])`);
+  if (activePanel) {
+    activePanel.classList.remove("panel-enter");
+    requestAnimationFrame(() => activePanel.classList.add("panel-enter"));
+  }
 
   if (tab === "saved") renderSavedGrid();
   if (tab === "slate" && !state.slateLoaded) loadSlate();
@@ -3386,6 +3392,8 @@ async function loadV2Board(force = false) {
   els.v2BoardEmpty.hidden = true;
   els.v2BoardError.hidden = true;
   els.v2BoardList.innerHTML = "";
+  els.v2RefreshBtn.classList.add("is-loading");
+  els.v2RefreshBtn.disabled = true;
 
   try {
     const res = await fetch("/api/board", { cache: "no-store" });
@@ -3393,7 +3401,7 @@ async function loadV2Board(force = false) {
     els.v2BoardLoading.hidden = true;
 
     if (!res.ok || data.error) {
-      els.v2BoardError.textContent = data.error || `Request failed (${res.status})`;
+      els.v2BoardError.innerHTML = `<span class="state-orbit state-orbit-error" aria-hidden="true"><i></i></span><span class="state-copy"><strong>Board feed is reconnecting</strong><small>Live props are temporarily unavailable. Try again in a moment.</small></span>`;
       els.v2BoardError.hidden = false;
       return;
     }
@@ -3403,8 +3411,11 @@ async function loadV2Board(force = false) {
     renderBotBoard(data);
   } catch (err) {
     els.v2BoardLoading.hidden = true;
-    els.v2BoardError.textContent = err.message || "Failed to load the board.";
+    els.v2BoardError.innerHTML = `<span class="state-orbit state-orbit-error" aria-hidden="true"><i></i></span><span class="state-copy"><strong>Board feed is reconnecting</strong><small>We couldn't reach the live analysis engine. Your page is still ready—refresh again shortly.</small></span>`;
     els.v2BoardError.hidden = false;
+  } finally {
+    els.v2RefreshBtn.classList.remove("is-loading");
+    els.v2RefreshBtn.disabled = false;
   }
 }
 
@@ -3481,11 +3492,13 @@ function renderBotBoard(data) {
     ? `${props.length} prop${props.length === 1 ? "" : "s"} · updated ${data.generated_at ? new Date(data.generated_at).toLocaleString() : "recently"}`
     : "KRAZY PICKS ACTIVE BOARD — data-driven props: filtered, scored, ranked.";
   els.v2BoardEmpty.textContent =
-    "The board is empty right now. Check back shortly for new qualified plays.";
+    "";
   els.v2BoardList.innerHTML = "";
 
   if (props.length === 0) {
+    els.v2BoardEmpty.innerHTML = `<span class="state-orbit" aria-hidden="true"><i></i></span><span class="state-copy"><b class="state-live">LIVE BOARD SCAN</b><strong>Scanning today's MLB board</strong><small>No plays currently meet the KRAZY PICKS standard. The board will update when a qualified edge appears.</small></span><button type="button" class="state-refresh" data-empty-refresh>Scan again</button>`;
     els.v2BoardEmpty.hidden = false;
+    els.v2BoardEmpty.querySelector("[data-empty-refresh]")?.addEventListener("click", () => loadV2Board(true));
     return;
   }
   els.v2BoardEmpty.hidden = true;
@@ -4228,8 +4241,105 @@ function openPlayerDetail(p) {
 
   // The play tab
   renderPdPlayTab(p);
+  renderPdWhyTab(p);
+  renderPdChallengeTab(p);
   renderPdBreakdownTab(p);
   updatePdTabs();
+}
+
+function pdDecisionDrivers(p) {
+  const stats = p.stats || {}, splits = stats.splits || {}, pitcher = stats.pitcher || {};
+  const side = stats.side === "under" ? "under" : "over";
+  const drivers = [];
+  const add = (name, impact, detail, kind = impact >= 0 ? "positive" : "negative", modeled = true) => {
+    if (!detail || !Number.isFinite(Number(impact))) return;
+    drivers.push({ name, impact: Number(impact), detail, kind, modeled });
+  };
+
+  const l10 = Number(splits.l10?.rate), l20 = Number(splits.l20?.rate), l5 = Number(splits.l5?.rate);
+  if (Number.isFinite(l10)) add("Recent hit profile", Math.max(-8, Math.min(8, (l10 - 50) / 6)), `${l10}% over the last 10${Number.isFinite(l20) ? ` and ${l20}% over the last 20` : ""}.`);
+  if (Number.isFinite(l5) && Number.isFinite(l20)) add("Current form", Math.max(-4, Math.min(4, (l5 - l20) / 8)), `${l5}% L5 versus ${l20}% L20; short-term form is kept below the primary sample.`);
+  (stats.matchup_factors || []).forEach((f) => {
+    const raw = Number(f.score), weight = Number(f.weight);
+    if (!Number.isFinite(raw)) return;
+    const centered = raw > 10 ? (raw - 50) / 8 : raw - 5;
+    add(f.name || "Matchup factor", Math.max(-7, Math.min(7, centered * (Number.isFinite(weight) ? Math.max(.5, weight) : 1))), f.detail || `Matchup component scored ${raw}.`);
+  });
+  if (pitcher.name) {
+    const era = Number(pitcher.era), whip = Number(pitcher.whip), k9 = Number(pitcher.k_per_9);
+    let impact = 0;
+    if (Number.isFinite(era)) impact += (era - 4.2) * (side === "over" ? 1.5 : -1.5);
+    if (Number.isFinite(whip)) impact += (whip - 1.28) * (side === "over" ? 5 : -5);
+    if (p.stat_type === "Pitcher Strikeouts" && Number.isFinite(k9)) impact = (k9 - 8.5) * (side === "over" ? 1.3 : -1.3);
+    add("Opposing pitcher", Math.max(-6, Math.min(6, impact)), `${pitcher.name}: ${Number.isFinite(era) ? `ERA ${era}` : "ERA unavailable"}${Number.isFinite(whip) ? `, WHIP ${whip}` : ""}.`);
+  }
+  if (stats.platoon_note) add("Handedness", /favo|edge|advantage/i.test(stats.platoon_note) ? 3 : -2, stats.platoon_note);
+  const bvp = stats.bvp;
+  if (bvp && Number(bvp.ab) >= 5) {
+    const avg = Number(bvp.avg), sample = Number(bvp.ab);
+    const rawImpact = Number.isFinite(avg) ? (avg - .250) * 15 * (side === "over" ? 1 : -1) : 0;
+    add("Batter vs. pitcher", Math.max(-2.5, Math.min(2.5, rawImpact)) * Math.min(1, sample / 20), `${sample} AB sample${Number.isFinite(avg) ? ` with a ${avg.toFixed(3)} AVG` : ""}; capped because small BvP samples are noisy.`);
+  }
+  if (p.risk_summary) add("Known risk", -4, p.risk_summary, "negative");
+  if (stats.market_movement) add("Market movement", 1, String(stats.market_movement));
+  if (!drivers.length) add("Model alignment", 1, p.case_summary || "The board model's available signals support this side.");
+  return drivers.sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact));
+}
+
+function renderPdWhyTab(p) {
+  const section = document.getElementById("pd-why-section");
+  const drivers = pdDecisionDrivers(p), positives = drivers.filter(d => d.impact >= 0), negatives = drivers.filter(d => d.impact < 0);
+  const rows = (items) => items.slice(0, 5).map((d, idx) => `<article class="pd-driver ${d.kind}"><span class="pd-driver-rank">${idx + 1}</span><div><strong>${escapeHtml(d.name)}</strong><p>${escapeHtml(d.detail)}</p><small>${d.modeled ? "Included in VORTEX's decision" : "Needs verification"}</small></div><b>${d.impact >= 0 ? "+" : ""}${d.impact.toFixed(1)}</b></article>`).join("");
+  section.innerHTML = `<div class="pd-explain-head"><span>DECISION DRIVERS</span><h3>Why VORTEX likes this play</h3><p>Ranked by estimated influence—not by how dramatic a stat looks.</p></div><div class="pd-driver-group"><h4>Supporting the play</h4>${rows(positives) || `<p class="pd-empty-note">No strong supporting factor was exposed by the current data feed.</p>`}</div><div class="pd-driver-group"><h4>Working against it</h4>${rows(negatives) || `<p class="pd-empty-note">No material conflict was reported.</p>`}</div><div class="pd-net-read"><b>NET READ</b><span>${negatives.length ? "The model sees the conflict, but its supporting evidence remains stronger at the current grade." : "The important available signals are aligned, with no material contradiction exposed."}</span></div>`;
+}
+
+const PD_CHALLENGES = [
+  ["recent", "Recent form"], ["hand", "Handedness"], ["pitcher", "Pitch matchup"],
+  ["bullpen", "Bullpen"], ["opportunity", "Lineup / opportunity"], ["workload", "Pitch count / workload"],
+  ["environment", "Weather / park"], ["price", "Price or line"], ["bvp", "Batter vs. pitcher"], ["gut", "Gut feeling"]
+];
+
+function evaluatePdChallenge(p, key) {
+  const stats = p.stats || {}, drivers = pdDecisionDrivers(p);
+  const terms = { recent:/recent|form|l5|l10|l20/i, hand:/hand|platoon/i, pitcher:/pitch|matchup|opposing/i, bullpen:/bullpen/i, opportunity:/lineup|opportunity|plate appearance/i, workload:/workload|pitch count|leash|innings/i, environment:/weather|park|wind/i, price:/market|price|odds|line/i, bvp:/batter vs|bvp/i };
+  const matches = drivers.filter(d => terms[key]?.test(`${d.name} ${d.detail}`));
+  let status = "NEEDS VERIFICATION", strength = "Unknown", shift = 0, explanation = "VORTEX does not currently have a verified input for this concern. Treat it as a wait condition, not an automatic fade.";
+  if (key === "gut") {
+    status = "NOT QUANTIFIABLE"; strength = "Unverified";
+    explanation = "A gut concern is worth noticing, but it cannot overturn the model until you can name the underlying baseball or pricing assumption.";
+  } else if (matches.length) {
+    shift = Math.min(8, matches.reduce((n, d) => n + Math.min(4, Math.abs(d.impact)), 0));
+    const adverse = matches.some(d => d.impact < 0);
+    strength = shift >= 6 ? "Material" : shift >= 3 ? "Moderate" : "Minor";
+    status = "ALREADY MODELED";
+    explanation = adverse ? `The concern is real and already reduces the grade through ${matches.map(d => d.name).join(" and ")}. It does not automatically erase the remaining edge.` : `VORTEX already checks ${matches.map(d => d.name).join(" and ")}, but the available evidence currently supports the selected side rather than contradicting it.`;
+  } else if (["bullpen", "opportunity", "workload", "environment"].includes(key)) {
+    strength = "Potentially material";
+    explanation = "This can change the play, but the current card does not expose enough verified data to measure it. Confirm the latest information before treating the recommendation as final.";
+  } else {
+    status = "LOW EVIDENCE"; strength = "Minor";
+    explanation = "The current data does not show this as a strong contradiction. Avoid giving it veto power unless you have new, verified information.";
+  }
+  const base = Number(stats.model_probability ?? stats.probability ?? p.probability);
+  const basePct = Number.isFinite(base) ? (base <= 1 ? base * 100 : base) : null;
+  const adjusted = basePct == null ? null : Math.max(1, basePct - shift);
+  const verdict = status === "NEEDS VERIFICATION" && strength === "Potentially material" ? "WAIT FOR CONFIRMATION" : adjusted != null && adjusted < 55 ? "PASS / EDGE TOO THIN" : "ORIGINAL VERDICT SURVIVES";
+  return { status, strength, shift, explanation, basePct, adjusted, verdict };
+}
+
+function renderPdChallengeResult(p, key) {
+  const result = evaluatePdChallenge(p, key), host = document.getElementById("pd-challenge-result");
+  const label = PD_CHALLENGES.find(x => x[0] === key)?.[1] || "Concern";
+  host.innerHTML = `<div class="pd-challenge-result"><div class="pd-challenge-status"><span>${escapeHtml(result.status)}</span><b>${escapeHtml(result.strength)} objection</b></div><h4>${escapeHtml(label)}</h4><p>${escapeHtml(result.explanation)}</p>${result.basePct != null ? `<div class="pd-prob-shift"><span><small>ORIGINAL</small><b>${result.basePct.toFixed(1)}%</b></span><i>→</i><span><small>AFTER CHALLENGE</small><b>${result.adjusted.toFixed(1)}%</b></span></div>` : `<div class="pd-prob-note">Probability impact cannot be shown because this card does not expose a calibrated model probability.</div>`}<div class="pd-challenge-verdict"><small>VORTEX RESPONSE</small><strong>${escapeHtml(result.verdict)}</strong></div></div>`;
+}
+
+function renderPdChallengeTab(p) {
+  const section = document.getElementById("pd-challenge-section");
+  section.innerHTML = `<div class="pd-explain-head"><span>OBJECTION CHECK</span><h3>What makes you question it?</h3><p>Choose the concern. VORTEX will tell you whether it is already modeled, meaningful, or still needs verification.</p></div><div class="pd-challenge-grid">${PD_CHALLENGES.map(([key,label]) => `<button type="button" data-pd-challenge="${key}">${escapeHtml(label)}</button>`).join("")}</div><div id="pd-challenge-result" aria-live="polite"><p class="pd-empty-note">Select one concern to challenge the recommendation.</p></div>`;
+  section.querySelectorAll("[data-pd-challenge]").forEach(btn => btn.addEventListener("click", () => {
+    section.querySelectorAll("[data-pd-challenge]").forEach(b => b.classList.toggle("active", b === btn));
+    renderPdChallengeResult(p, btn.dataset.pdChallenge);
+  }));
 }
 
 function renderPdPlayTab(p) {
@@ -4333,6 +4443,8 @@ function updatePdTabs() {
     btn.classList.toggle("active", btn.dataset.pdTab === pdState.tab);
   });
   document.getElementById("pd-play-section").hidden = pdState.tab !== "play";
+  document.getElementById("pd-why-section").hidden = pdState.tab !== "why";
+  document.getElementById("pd-challenge-section").hidden = pdState.tab !== "challenge";
   document.getElementById("pd-breakdown-section").hidden = pdState.tab !== "breakdown";
 }
 

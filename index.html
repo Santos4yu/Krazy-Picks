@@ -17,7 +17,7 @@
 <link rel="apple-touch-icon" href="/krazy-picks-logo.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="styles.css?v=71" />
+<link rel="stylesheet" href="styles.css?v=73" />
 <style>
   /* Inline (not the external stylesheet) so it applies before ANY paint --
      this is what actually prevents the flash of the app before the auth
@@ -458,7 +458,7 @@
   </div>
   <div class="slate-list" id="v2-board-list"></div>
   <p class="empty-state" id="v2-board-empty" hidden>The board is empty right now — it fills as soon as the data engine runs.</p>
-  <p class="slate-loading" id="v2-board-loading" hidden>Loading today's board…</p>
+  <div class="slate-loading premium-loading" id="v2-board-loading" hidden><span class="loading-scan" aria-hidden="true"><i></i><i></i><i></i></span><span><strong>Analyzing today's board</strong><small>Scoring matchups, form, opportunity, and risk</small></span></div>
   <p class="slate-error" id="v2-board-error" hidden></p>
 </section>
 
@@ -517,6 +517,8 @@
     </div>
     <div class="pd-tabs">
       <button type="button" class="pd-tab active" data-pd-tab="play">the play</button>
+      <button type="button" class="pd-tab" data-pd-tab="why">why it likes it</button>
+      <button type="button" class="pd-tab" data-pd-tab="challenge">challenge it</button>
       <button type="button" class="pd-tab" data-pd-tab="breakdown">break down</button>
     </div>
     <div class="pd-body" id="pd-body">
@@ -530,6 +532,8 @@
         </div>
         <div class="pd-case" id="pd-case"></div>
       </div>
+      <div class="pd-cheat-section pd-why-section" id="pd-why-section" hidden></div>
+      <div class="pd-cheat-section pd-challenge-section" id="pd-challenge-section" hidden></div>
       <div class="pd-cheat-section" id="pd-breakdown-section" hidden></div>
     </div>
     <div class="pd-footer">
@@ -816,6 +820,6 @@
 </template>
 
 <script type="module" src="/src/main.jsx"></script>
-<script type="module" src="/app.js?v=53"></script>
+<script type="module" src="/app.js?v=55"></script>
 </body>
 </html>

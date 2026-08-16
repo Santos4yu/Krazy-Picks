@@ -3839,90 +3839,26 @@ function buildBotDetailHtml(p, i) {
     ? `📊 Season avg ${seasonAvg} over ${splits.games_played ?? "—"} games.`
     : "";
 
-  let html = `
-    <div class="v2-detail-section">
-      <div class="v2-detail-title">The edge</div>
-      <p class="v2-detail-text"><strong>${escapeHtml(fmtBotEv(p))}</strong> at ${escapeHtml(p.sportsbook || "best price")}${typeof stats.best_odds === "number" ? ` (${stats.best_odds > 0 ? "+" : ""}${stats.best_odds})` : ""}.</p>
-    </div>
-    <div class="v2-decision-strip">
-      <span><b>WHY</b>${escapeHtml(String(p.case_summary || "Model and matchup signals aligned.").slice(0, 145))}</span>
-      <span class="risk"><b>RISK</b>${escapeHtml(String(p.risk_summary || "No major conflict reported.").slice(0, 120))}</span>
-      <span><b>MARKET</b>${stats.market_movement ? escapeHtml(String(stats.market_movement)) : "Movement unavailable — not used in score."}</span>
-    </div>`;
+  const l5 = splits.l5?.rate, l10 = splits.l10?.rate, l20 = splits.l20?.rate;
+  let html = `<div class="board-analysis-summary">
+    <div><span>PRICE</span><strong>${escapeHtml(fmtBotEv(p))}</strong><small>${escapeHtml(p.sportsbook || "Best available")}${typeof stats.best_odds === "number" ? ` · ${stats.best_odds > 0 ? "+" : ""}${stats.best_odds}` : ""}</small></div>
+    <div><span>RECENT</span><strong>${typeof l10 === "number" ? `${l10}% L10` : "No sample"}</strong><small>${typeof l5 === "number" ? `${l5}% L5` : "L5 —"}${typeof l20 === "number" ? ` · ${l20}% L20` : ""}</small></div>
+    <div><span>MATCHUP</span><strong>${Number.isFinite(Number(stats.matchup_score)) ? `${Math.round(Number(stats.matchup_score))}/100` : "Not graded"}</strong><small>${escapeHtml(boardMatchupLabel(stats.matchup_score) || "Coverage unavailable")}</small></div>
+  </div><div class="board-analysis-case"><div><span>CASE</span><p>${escapeHtml(cleanAnalysisText(p.case_summary || "Model and matchup signals align with this side."))}</p></div><div class="risk"><span>RISK</span><p>${escapeHtml(cleanAnalysisText(p.risk_summary || "No material conflict reported."))}</p></div></div>`;
 
   if (Number.isFinite(Number(stats.matchup_score)) && (stats.matchup_factors || []).length) {
-    const factors = stats.matchup_factors.map((factor) => `
-      <div class="k-matchup-factor">
-        <div><strong>${escapeHtml(factor.name || "Factor")}</strong><small>${escapeHtml(factor.detail || "")}</small></div>
-        <span>${escapeHtml(String(factor.score ?? "—"))}<em>W${escapeHtml(String(factor.weight ?? "—"))}</em></span>
-      </div>`).join("");
+    const factors = stats.matchup_factors.slice().sort((a,b) => Math.abs(Number(b.score)-50)-Math.abs(Number(a.score)-50)).slice(0,3).map((factor) => `<div class="board-factor-row"><div><strong>${escapeHtml(factor.name || "Factor")}</strong><small>${escapeHtml(cleanAnalysisText(factor.detail || ""))}</small></div><b>${escapeHtml(String(factor.score ?? "—"))}</b></div>`).join("");
     html += `
-      <div class="v2-detail-section k-matchup-breakdown">
-        <div class="v2-detail-title">Strikeout matchup grade</div>
-        <div class="k-matchup-total"><strong>${Math.round(Number(stats.matchup_score))}</strong><span>/100<br>${escapeHtml(boardMatchupLabel(stats.matchup_score))}</span></div>
-        <div class="k-matchup-factors">${factors}</div>
-      </div>`;
-  }
-
-  // Hit rates section with emojis
-  const hasSplits = ["l5", "l10", "l20"].some((k) => splits[k] && typeof splits[k].rate === "number");
-  if (hasSplits) {
-    const l5 = splits.l5 && typeof splits.l5.rate === "number" ? `${splits.l5.rate}% L5` : "";
-    const l10 = splits.l10 && typeof splits.l10.rate === "number" ? `${splits.l10.rate}% L10` : "";
-    const l20 = splits.l20 && typeof splits.l20.rate === "number" ? `${splits.l20.rate}% L20` : "";
-    const hitParts = [l5, l10, l20].filter(Boolean).join(" · ");
-    const avgVal = splits.l10 && splits.l10.avg != null ? splits.l10.avg : null;
-    const summaryLine = `📊 ${hitParts}${avgVal != null ? ` · avg ${avgVal}` : ""}`;
-
-    html += `
-    <div class="v2-detail-section">
-      <p class="v2-detail-text">${escapeHtml(summaryLine)}</p>
-      ${streakLine ? `<p class="v2-detail-text">${streakLine}</p>` : ""}
-      ${trendLine ? `<p class="v2-detail-text">${escapeHtml(trendLine)}</p>` : ""}
-      ${seasonLine ? `<p class="v2-detail-text">${seasonLine}</p>` : ""}
-    </div>`;
-  } else if (p.case_summary) {
-    html += `
-    <div class="v2-detail-section">
-      <p class="v2-detail-text">📊 ${escapeHtml(p.case_summary)}</p>
-    </div>`;
+      <div class="board-factor-table"><div class="board-factor-head"><span>Key matchup drivers</span><small>Top 3 by signal strength</small></div>${factors}</div>`;
   }
 
   // Matchup with pitcher
   if (pitcher.name) {
-    const platoon = stats.platoon_note ? `\n🤝 Platoon edge — ${escapeHtml(stats.platoon_note)}.` : "";
-    html += `
-    <div class="v2-detail-section">
-      <div class="v2-detail-title">Matchup</div>
-      <p class="v2-detail-text">🎯 <strong>${escapeHtml(pitcher.name)}</strong> (${escapeHtml(pitcher.hand ?? "?")}HP) — ERA ${pitcher.era ?? "—"} · FIP ${pitcher.fip ?? "—"} · K/9 ${pitcher.k_per_9 ?? "—"} · HR/9 ${pitcher.hr_per_9 ?? "—"} · WHIP ${pitcher.whip ?? "—"}${platoon}</p>
-    </div>`;
+    html += `<div class="board-matchup-line"><span>OPPOSING PITCHER</span><p><strong>${escapeHtml(pitcher.name)}</strong> · ${escapeHtml(pitcher.hand ?? "?")}HP · ERA ${pitcher.era ?? "—"} · FIP ${pitcher.fip ?? "—"} · K/9 ${pitcher.k_per_9 ?? "—"} · HR/9 ${pitcher.hr_per_9 ?? "—"} · WHIP ${pitcher.whip ?? "—"}</p>${stats.platoon_note ? `<small>${escapeHtml(cleanAnalysisText(stats.platoon_note))}</small>` : ""}</div>`;
   }
 
   // BvP
-  if (bvp && bvp.ab >= 5) {
-    html += `
-    <div class="v2-detail-section">
-      <p class="v2-detail-text">🤝 <strong>BvP (${escapeHtml(bvp.sample ?? "career")}):</strong> ${bvp.ab} AB · AVG <strong>${bvp.avg}</strong> · ${bvp.hr} HR · ${bvp.k} K · OPS ${bvp.ops}</p>
-    </div>`;
-  }
-
-  // Trend
-  if (stats.trend_signal) {
-    const t = String(stats.trend_signal);
-    const icon = t.includes("HOT") ? "🔥" : t.includes("COLD") ? "❄️" : "📈";
-    html += `
-    <div class="v2-detail-section">
-      <p class="v2-detail-text">${icon} <strong>Trend:</strong> ${escapeHtml(t)}</p>
-    </div>`;
-  }
-
-  // Risk
-  if (p.risk_summary) {
-    html += `
-    <div class="v2-detail-section">
-      <p class="v2-detail-text" style="color:var(--warn)">⚠️ <strong>Risk:</strong> ${escapeHtml(p.risk_summary)}</p>
-    </div>`;
-  }
+  if (bvp && bvp.ab >= 5) html += `<div class="board-bvp-line"><span>BvP</span><p>${bvp.ab} AB · AVG ${bvp.avg} · ${bvp.hr} HR · ${bvp.k} K · OPS ${bvp.ops}</p></div>`;
 
   const canDeepDive = p.sport === "MLB" && BOT_STAT_TO_RESEARCH_STAT[p.stat_type];
   const detailBtns = [];
@@ -3930,7 +3866,7 @@ function buildBotDetailHtml(p, i) {
   if (canDeepDive) {
     detailBtns.push(`<button type="button" class="v2-deepdive-btn" data-v2-idx="${i}">Deep Dive →</button>`);
   }
-  html += `<div style="display:flex;gap:8px;flex-wrap:wrap">${detailBtns.join("")}</div>`;
+  html += `<div class="board-analysis-actions">${detailBtns.join("")}</div>`;
   return html;
 }
 
@@ -4262,8 +4198,9 @@ function pdDecisionDrivers(p) {
   (stats.matchup_factors || []).forEach((f) => {
     const raw = Number(f.score), weight = Number(f.weight);
     if (!Number.isFinite(raw)) return;
-    const centered = raw > 10 ? (raw - 50) / 8 : raw - 5;
-    add(f.name || "Matchup factor", Math.max(-7, Math.min(7, centered * (Number.isFinite(weight) ? Math.max(.5, weight) : 1))), f.detail || `Matchup component scored ${raw}.`);
+    const centered = raw > 10 ? (raw - 50) / 10 : raw - 5;
+    const weightScale = Number.isFinite(weight) ? Math.max(.35, Math.min(1.25, weight / 20)) : 1;
+    add(f.name || "Matchup factor", Math.max(-5, Math.min(5, centered * weightScale)), cleanAnalysisText(f.detail || `Matchup component scored ${raw}.`));
   });
   if (pitcher.name) {
     const era = Number(pitcher.era), whip = Number(pitcher.whip), k9 = Number(pitcher.k_per_9);
@@ -4273,14 +4210,14 @@ function pdDecisionDrivers(p) {
     if (p.stat_type === "Pitcher Strikeouts" && Number.isFinite(k9)) impact = (k9 - 8.5) * (side === "over" ? 1.3 : -1.3);
     add("Opposing pitcher", Math.max(-6, Math.min(6, impact)), `${pitcher.name}: ${Number.isFinite(era) ? `ERA ${era}` : "ERA unavailable"}${Number.isFinite(whip) ? `, WHIP ${whip}` : ""}.`);
   }
-  if (stats.platoon_note) add("Handedness", /favo|edge|advantage/i.test(stats.platoon_note) ? 3 : -2, stats.platoon_note);
+  if (stats.platoon_note) add("Handedness", /favo|edge|advantage/i.test(stats.platoon_note) ? 3 : -2, cleanAnalysisText(stats.platoon_note));
   const bvp = stats.bvp;
   if (bvp && Number(bvp.ab) >= 5) {
     const avg = Number(bvp.avg), sample = Number(bvp.ab);
     const rawImpact = Number.isFinite(avg) ? (avg - .250) * 15 * (side === "over" ? 1 : -1) : 0;
     add("Batter vs. pitcher", Math.max(-2.5, Math.min(2.5, rawImpact)) * Math.min(1, sample / 20), `${sample} AB sample${Number.isFinite(avg) ? ` with a ${avg.toFixed(3)} AVG` : ""}; capped because small BvP samples are noisy.`);
   }
-  if (p.risk_summary) add("Known risk", -4, p.risk_summary, "negative");
+  if (p.risk_summary) add("Known risk", -4, cleanAnalysisText(p.risk_summary), "negative");
   if (stats.market_movement) add("Market movement", 1, String(stats.market_movement));
   if (!drivers.length) add("Model alignment", 1, p.case_summary || "The board model's available signals support this side.");
   return drivers.sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact));
@@ -4289,8 +4226,8 @@ function pdDecisionDrivers(p) {
 function renderPdWhyTab(p) {
   const section = document.getElementById("pd-why-section");
   const drivers = pdDecisionDrivers(p), positives = drivers.filter(d => d.impact >= 0), negatives = drivers.filter(d => d.impact < 0);
-  const rows = (items) => items.slice(0, 5).map((d, idx) => `<article class="pd-driver ${d.kind}"><span class="pd-driver-rank">${idx + 1}</span><div><strong>${escapeHtml(d.name)}</strong><p>${escapeHtml(d.detail)}</p><small>${d.modeled ? "Included in VORTEX's decision" : "Needs verification"}</small></div><b>${d.impact >= 0 ? "+" : ""}${d.impact.toFixed(1)}</b></article>`).join("");
-  section.innerHTML = `<div class="pd-explain-head"><span>DECISION DRIVERS</span><h3>Why VORTEX likes this play</h3><p>Ranked by estimated influence—not by how dramatic a stat looks.</p></div><div class="pd-driver-group"><h4>Supporting the play</h4>${rows(positives) || `<p class="pd-empty-note">No strong supporting factor was exposed by the current data feed.</p>`}</div><div class="pd-driver-group"><h4>Working against it</h4>${rows(negatives) || `<p class="pd-empty-note">No material conflict was reported.</p>`}</div><div class="pd-net-read"><b>NET READ</b><span>${negatives.length ? "The model sees the conflict, but its supporting evidence remains stronger at the current grade." : "The important available signals are aligned, with no material contradiction exposed."}</span></div>`;
+  const rows = (items, limit) => items.slice(0, limit).map((d, idx) => `<article class="pd-driver ${d.kind}"><span class="pd-driver-rank">${idx + 1}</span><div><strong>${escapeHtml(d.name)}</strong><p>${escapeHtml(cleanAnalysisText(d.detail))}</p></div><b>${d.impact >= 0 ? "+" : ""}${d.impact.toFixed(1)}</b></article>`).join("");
+  section.innerHTML = `<div class="pd-explain-head"><span>MODEL RATIONALE</span><h3>What is driving the pick</h3><p>The strongest inputs are shown first. Scores measure influence on this recommendation.</p></div><div class="pd-driver-group"><h4>Supports the play</h4>${rows(positives,4) || `<p class="pd-empty-note">No strong supporting factor was exposed.</p>`}</div><div class="pd-driver-group"><h4>Pushes against it</h4>${rows(negatives,2) || `<p class="pd-empty-note">No material conflict was reported.</p>`}</div><div class="pd-net-read"><b>READ</b><span>${negatives.length ? "The negative evidence is included, but it is not strong enough to overturn the recommendation." : "The primary inputs point in the same direction."}</span></div>`;
 }
 
 const PD_CHALLENGES = [
@@ -4308,11 +4245,11 @@ function evaluatePdChallenge(p, key) {
     status = "NOT QUANTIFIABLE"; strength = "Unverified";
     explanation = "A gut concern is worth noticing, but it cannot overturn the model until you can name the underlying baseball or pricing assumption.";
   } else if (matches.length) {
-    shift = Math.min(8, matches.reduce((n, d) => n + Math.min(4, Math.abs(d.impact)), 0));
     const adverse = matches.some(d => d.impact < 0);
-    strength = shift >= 6 ? "Material" : shift >= 3 ? "Moderate" : "Minor";
-    status = "ALREADY MODELED";
-    explanation = adverse ? `The concern is real and already reduces the grade through ${matches.map(d => d.name).join(" and ")}. It does not automatically erase the remaining edge.` : `VORTEX already checks ${matches.map(d => d.name).join(" and ")}, but the available evidence currently supports the selected side rather than contradicting it.`;
+    shift = adverse ? Math.min(8, matches.filter(d => d.impact < 0).reduce((n, d) => n + Math.min(4, Math.abs(d.impact)), 0)) : 0;
+    strength = adverse ? (shift >= 6 ? "Material" : shift >= 3 ? "Moderate" : "Minor") : "Does not weaken play";
+    status = adverse ? "ALREADY MODELED" : "MODELED — NOT A RED FLAG";
+    explanation = adverse ? `This concern already reduces the grade through ${matches.filter(d => d.impact < 0).map(d => d.name).join(" and ")}. The remaining evidence still supports the current verdict.` : `VORTEX already evaluates ${matches.map(d => d.name).join(" and ")}. In the available data, this factor supports the play rather than opposing it.`;
   } else if (["bullpen", "opportunity", "workload", "environment"].includes(key)) {
     strength = "Potentially material";
     explanation = "This can change the play, but the current card does not expose enough verified data to measure it. Confirm the latest information before treating the recommendation as final.";
@@ -4330,12 +4267,12 @@ function evaluatePdChallenge(p, key) {
 function renderPdChallengeResult(p, key) {
   const result = evaluatePdChallenge(p, key), host = document.getElementById("pd-challenge-result");
   const label = PD_CHALLENGES.find(x => x[0] === key)?.[1] || "Concern";
-  host.innerHTML = `<div class="pd-challenge-result"><div class="pd-challenge-status"><span>${escapeHtml(result.status)}</span><b>${escapeHtml(result.strength)} objection</b></div><h4>${escapeHtml(label)}</h4><p>${escapeHtml(result.explanation)}</p>${result.basePct != null ? `<div class="pd-prob-shift"><span><small>ORIGINAL</small><b>${result.basePct.toFixed(1)}%</b></span><i>→</i><span><small>AFTER CHALLENGE</small><b>${result.adjusted.toFixed(1)}%</b></span></div>` : `<div class="pd-prob-note">Probability impact cannot be shown because this card does not expose a calibrated model probability.</div>`}<div class="pd-challenge-verdict"><small>VORTEX RESPONSE</small><strong>${escapeHtml(result.verdict)}</strong></div></div>`;
+  host.innerHTML = `<div class="pd-challenge-result"><div class="pd-challenge-status"><span>${escapeHtml(result.status)}</span><b>${escapeHtml(result.strength)}</b></div><h4>${escapeHtml(label)}</h4><p>${escapeHtml(result.explanation)}</p>${result.basePct != null ? `<div class="pd-prob-shift"><span><small>ORIGINAL</small><b>${result.basePct.toFixed(1)}%</b></span><i>→</i><span><small>AFTER REVIEW</small><b>${result.adjusted.toFixed(1)}%</b></span></div>` : ""}<div class="pd-challenge-verdict"><small>CONCLUSION</small><strong>${escapeHtml(result.verdict)}</strong></div></div>`;
 }
 
 function renderPdChallengeTab(p) {
   const section = document.getElementById("pd-challenge-section");
-  section.innerHTML = `<div class="pd-explain-head"><span>OBJECTION CHECK</span><h3>What makes you question it?</h3><p>Choose the concern. VORTEX will tell you whether it is already modeled, meaningful, or still needs verification.</p></div><div class="pd-challenge-grid">${PD_CHALLENGES.map(([key,label]) => `<button type="button" data-pd-challenge="${key}">${escapeHtml(label)}</button>`).join("")}</div><div id="pd-challenge-result" aria-live="polite"><p class="pd-empty-note">Select one concern to challenge the recommendation.</p></div>`;
+  section.innerHTML = `<div class="pd-explain-head"><span>SECOND LOOK</span><h3>Test a concern</h3><p>Select the part of the matchup that gives you pause.</p></div><div class="pd-challenge-grid">${PD_CHALLENGES.map(([key,label]) => `<button type="button" data-pd-challenge="${key}">${escapeHtml(label)}</button>`).join("")}</div><div id="pd-challenge-result" aria-live="polite"><p class="pd-empty-note">Choose a concern to compare it with the model's inputs.</p></div>`;
   section.querySelectorAll("[data-pd-challenge]").forEach(btn => btn.addEventListener("click", () => {
     section.querySelectorAll("[data-pd-challenge]").forEach(b => b.classList.toggle("active", b === btn));
     renderPdChallengeResult(p, btn.dataset.pdChallenge);
@@ -4356,20 +4293,18 @@ function renderPdPlayTab(p) {
 
   // Case text
   let caseHtml = "";
-  const hitEmoji = (rate) => (rate >= 80 ? "🔥" : rate >= 60 ? "✅" : rate >= 40 ? "⚠️" : "❌");
-  const fmtRate = (r) => r && typeof r.rate === "number" ? `${hitEmoji(r.rate)} ${r.rate}% (${r.hits}/${r.games})` : "n/a";
+  const fmtRate = (r) => r && typeof r.rate === "number" ? `<strong>${r.rate}%</strong><small>${r.hits}/${r.games}</small>` : `<strong>—</strong><small>no sample</small>`;
 
   const hasSplits = ["l5", "l10", "l20"].some((k) => splits[k] && typeof splits[k].rate === "number");
   if (hasSplits) {
-    caseHtml += `<p style="margin:0 0 8px"><strong>Hit Rates</strong></p>`;
-    caseHtml += `<p style="margin:0 0 4px">L5: ${fmtRate(splits.l5)} · L10: ${fmtRate(splits.l10)} · L20: ${fmtRate(splits.l20)}</p>`;
+    caseHtml += `<div class="pd-rate-head"><span>RECENT RESULTS</span><small>Times this side cleared</small></div><div class="pd-rate-grid"><div><span>L5</span>${fmtRate(splits.l5)}</div><div><span>L10</span>${fmtRate(splits.l10)}</div><div><span>L20</span>${fmtRate(splits.l20)}</div></div>`;
     const streak = splits.l5?.streak || 0;
-    if (streak >= 4) caseHtml += `<p style="margin:6px 0 0;color:var(--good)">🔥 ${streak}-game hit streak active</p>`;
-    else if (streak <= -3) caseHtml += `<p style="margin:6px 0 0;color:var(--bad)">⚠️ ${Math.abs(streak)}-game miss streak</p>`;
+    if (streak >= 4) caseHtml += `<p class="pd-form-note positive">Active ${streak}-game hit streak</p>`;
+    else if (streak <= -3) caseHtml += `<p class="pd-form-note negative">Current ${Math.abs(streak)}-game miss streak</p>`;
     const seasonAvg = splits.season_avg != null ? splits.season_avg : null;
-    if (seasonAvg != null) caseHtml += `<p style="margin:6px 0 0;color:var(--text-dim)">📊 Season avg: ${seasonAvg}</p>`;
+    if (seasonAvg != null) caseHtml += `<p class="pd-season-note"><span>Season average</span><strong>${seasonAvg}</strong></p>`;
   } else if (p.case_summary) {
-    caseHtml = `<p style="margin:0">${escapeHtml(p.case_summary)}</p>`;
+    caseHtml = `<p class="pd-plain-copy">${escapeHtml(cleanAnalysisText(p.case_summary))}</p>`;
   }
 
   document.getElementById("pd-case").innerHTML = caseHtml;
@@ -4382,41 +4317,31 @@ function renderPdBreakdownTab(p) {
   const splits = stats.splits || {};
   let html = "";
 
-  if (p.hitRates && (p.hitRates.l5 || p.hitRates.l10 || p.hitRates.l20)) {
-    html += `<div class="pd-breakdown-section-inner">`;
-    html += `<p style="margin:0 0 8px"><strong>📊 Hit Rates</strong></p>`;
-    if (p.hitRates.l5 != null) html += `<p style="margin:0 0 2px">🔥 L5: <strong>${p.hitRates.l5}%</strong></p>`;
-    if (p.hitRates.l10 != null) html += `<p style="margin:0 0 2px">📈 L10: <strong>${p.hitRates.l10}%</strong></p>`;
-    if (p.hitRates.l20 != null) html += `<p style="margin:0 0 8px">📉 L20: <strong>${p.hitRates.l20}%</strong></p>`;
-    html += `</div>`;
-  }
-
   if (p.last5 && p.last5.length) {
-    html += `<p style="margin:8px 0 4px"><strong>🎯 Last 5 Outcomes</strong></p>`;
+    html += `<section class="pd-scout-block"><div class="pd-scout-title">LAST 5 OUTCOMES</div>`;
     const vals = p.last5.map((e) => typeof e === "object" && e !== null ? e.value : e);
     const over = p.side === "Over" || p.side === "over";
     const tagged = vals.map((v) => {
       const hit = over ? v >= p.line : v <= p.line;
       return `<span style="color:${hit ? "var(--success)" : "var(--danger)"};font-weight:600">${v}</span>`;
     });
-    html += `<p style="margin:0 0 8px;font-size:14px;letter-spacing:1px">${tagged.join(" → ")}</p>`;
+    html += `<p class="pd-outcomes">${tagged.join("<i></i>")}</p></section>`;
   }
 
   if (pitcher.name) {
-    html += `<p style="margin:0 0 8px"><strong>🎯 Pitcher Matchup</strong></p>`;
-    html += `<p style="margin:0 0 4px"><strong>${escapeHtml(pitcher.name)}</strong> (${escapeHtml(pitcher.hand ?? "?")}HP) — ERA ${pitcher.era ?? "—"} · K/9 ${pitcher.k_per_9 ?? "—"} · HR/9 ${pitcher.hr_per_9 ?? "—"} · WHIP ${pitcher.whip ?? "—"}</p>`;
-    if (stats.platoon_note) html += `<p style="margin:4px 0 0">🎯 Platoon: ${escapeHtml(stats.platoon_note)}</p>`;
+    html += `<section class="pd-scout-block"><div class="pd-scout-title">OPPOSING PITCHER</div><div class="pd-pitcher-line"><strong>${escapeHtml(pitcher.name)}</strong><span>${escapeHtml(pitcher.hand ?? "?")}HP</span></div><div class="pd-stat-line"><span>ERA <b>${pitcher.era ?? "—"}</b></span><span>K/9 <b>${pitcher.k_per_9 ?? "—"}</b></span><span>HR/9 <b>${pitcher.hr_per_9 ?? "—"}</b></span><span>WHIP <b>${pitcher.whip ?? "—"}</b></span></div>`;
+    if (stats.platoon_note) html += `<p class="pd-scout-note"><b>Platoon</b>${escapeHtml(cleanAnalysisText(stats.platoon_note))}</p>`;
+    html += `</section>`;
   }
 
   const bvp = stats.bvp || null;
   if (bvp && bvp.ab >= 5) {
-    html += `<p style="margin:8px 0 0"><strong>🤝 BvP:</strong> ${bvp.ab} AB · AVG <strong>${bvp.avg}</strong> · ${bvp.hr} HR · OPS ${bvp.ops}</p>`;
+    html += `<section class="pd-scout-block"><div class="pd-scout-title">BATTER VS. PITCHER</div><div class="pd-stat-line"><span>AB <b>${bvp.ab}</b></span><span>AVG <b>${bvp.avg}</b></span><span>HR <b>${bvp.hr}</b></span><span>OPS <b>${bvp.ops}</b></span></div></section>`;
   }
 
   if (stats.trend_signal) {
     const t = String(stats.trend_signal);
-    const icon = t.includes("HOT") ? "🔥" : t.includes("COLD") ? "❄️" : "📊";
-    html += `<p style="margin:8px 0 0"><strong>📈 Trend:</strong> ${icon} ${escapeHtml(t)}</p>`;
+    html += `<section class="pd-scout-block"><div class="pd-scout-title">TREND</div><p class="pd-plain-copy">${escapeHtml(cleanAnalysisText(t))}</p></section>`;
   }
 
   if (p.seasonLine) {
@@ -4424,7 +4349,7 @@ function renderPdBreakdownTab(p) {
   }
 
   if (p.risk_summary) {
-    html += `<p style="margin:8px 0 0;color:var(--warn)"><strong>⚠️ Risk:</strong> ${escapeHtml(p.risk_summary)}</p>`;
+    html += `<section class="pd-scout-block risk"><div class="pd-scout-title">PRIMARY RISK</div><p class="pd-plain-copy">${escapeHtml(cleanAnalysisText(p.risk_summary))}</p></section>`;
   }
 
   if (p.matchup && p.matchup.bullpen) {
@@ -4491,6 +4416,16 @@ function formatDate(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
+function cleanAnalysisText(value) {
+  return String(value ?? "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/[⚔️💣⚠️🎯🤝📊📈🔥❄️✅❌🔶]+/gu, " ")
+    .replace(/^(why|risk|market)\s*[:—-]\s*/i, "")
+    .replace(/platoon edge\s*[—:-]\s*platoon edge\s*[—:-]?\s*/i, "Platoon edge — ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function escapeHtml(str) {

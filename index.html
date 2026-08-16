@@ -17,7 +17,7 @@
 <link rel="apple-touch-icon" href="/krazy-picks-logo.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="styles.css?v=73" />
+<link rel="stylesheet" href="styles.css?v=74" />
 <style>
   /* Inline (not the external stylesheet) so it applies before ANY paint --
      this is what actually prevents the flash of the app before the auth
@@ -458,7 +458,7 @@
   </div>
   <div class="slate-list" id="v2-board-list"></div>
   <p class="empty-state" id="v2-board-empty" hidden>The board is empty right now — it fills as soon as the data engine runs.</p>
-  <div class="slate-loading premium-loading" id="v2-board-loading" hidden><span class="loading-scan" aria-hidden="true"><i></i><i></i><i></i></span><span><strong>Analyzing today's board</strong><small>Scoring matchups, form, opportunity, and risk</small></span></div>
+  <div class="slate-loading premium-loading" id="v2-board-loading" hidden><span class="loading-line" aria-hidden="true"></span><span><strong>Loading props</strong><small>Updating the current board</small></span></div>
   <p class="slate-error" id="v2-board-error" hidden></p>
 </section>
 
@@ -820,6 +820,6 @@
 </template>
 
 <script type="module" src="/src/main.jsx"></script>
-<script type="module" src="/app.js?v=55"></script>
+<script type="module" src="/app.js?v=56"></script>
 </body>
 </html>

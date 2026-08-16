@@ -14,7 +14,7 @@ import comingSoonLogoSrc from "./josoicon-transparent.png";
  * and nothing else in this file needs to change, as long as the
  * response shape matches { props: [...] }.
  */
-const DATA_SOURCE = "predictions.json";
+const DATA_SOURCE = "/predictions.json";
 
 /**
  * Live-compute endpoint — used whenever a searched player/stat/line/side
@@ -182,7 +182,7 @@ async function init() {
     state.props = data.props || [];
   } catch (err) {
     console.error(err);
-    els.emptyState.innerHTML = `<span class="state-orbit" aria-hidden="true"><i></i></span><span class="state-copy"><strong>Research feed is reconnecting</strong><small>Player analysis is temporarily unavailable. KRAZY PICKS will retry when the feed responds.</small></span>`;
+    els.emptyState.innerHTML = `<span class="status-mark" aria-hidden="true"></span><span class="state-copy"><strong>Research is temporarily unavailable</strong><small>Try again shortly. The rest of the site remains available.</small></span>`;
     state.props = [];
   }
 
@@ -3401,7 +3401,7 @@ async function loadV2Board(force = false) {
     els.v2BoardLoading.hidden = true;
 
     if (!res.ok || data.error) {
-      els.v2BoardError.innerHTML = `<span class="state-orbit state-orbit-error" aria-hidden="true"><i></i></span><span class="state-copy"><strong>Board feed is reconnecting</strong><small>Live props are temporarily unavailable. Try again in a moment.</small></span>`;
+      els.v2BoardError.innerHTML = `<span class="status-mark status-mark-error" aria-hidden="true"></span><span class="state-copy"><strong>Props are temporarily unavailable</strong><small>Refresh in a moment to try again.</small></span>`;
       els.v2BoardError.hidden = false;
       return;
     }
@@ -3411,7 +3411,7 @@ async function loadV2Board(force = false) {
     renderBotBoard(data);
   } catch (err) {
     els.v2BoardLoading.hidden = true;
-    els.v2BoardError.innerHTML = `<span class="state-orbit state-orbit-error" aria-hidden="true"><i></i></span><span class="state-copy"><strong>Board feed is reconnecting</strong><small>We couldn't reach the live analysis engine. Your page is still ready—refresh again shortly.</small></span>`;
+    els.v2BoardError.innerHTML = `<span class="status-mark status-mark-error" aria-hidden="true"></span><span class="state-copy"><strong>Props are temporarily unavailable</strong><small>Refresh in a moment to try again.</small></span>`;
     els.v2BoardError.hidden = false;
   } finally {
     els.v2RefreshBtn.classList.remove("is-loading");
@@ -3496,7 +3496,7 @@ function renderBotBoard(data) {
   els.v2BoardList.innerHTML = "";
 
   if (props.length === 0) {
-    els.v2BoardEmpty.innerHTML = `<span class="state-orbit" aria-hidden="true"><i></i></span><span class="state-copy"><b class="state-live">LIVE BOARD SCAN</b><strong>Scanning today's MLB board</strong><small>No plays currently meet the KRAZY PICKS standard. The board will update when a qualified edge appears.</small></span><button type="button" class="state-refresh" data-empty-refresh>Scan again</button>`;
+    els.v2BoardEmpty.innerHTML = `<span class="status-mark" aria-hidden="true"></span><span class="state-copy"><strong>No qualified plays yet</strong><small>The board updates when a prop clears the KRAZY PICKS thresholds.</small></span><button type="button" class="state-refresh" data-empty-refresh>Refresh</button>`;
     els.v2BoardEmpty.hidden = false;
     els.v2BoardEmpty.querySelector("[data-empty-refresh]")?.addEventListener("click", () => loadV2Board(true));
     return;

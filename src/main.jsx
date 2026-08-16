@@ -44,7 +44,7 @@ function VortexDock() {
     onClick: () => window.dispatchEvent(new CustomEvent('vortex:switch-tab', { detail: { tab: key } })),
     icon: <>{icons[key]}{key === 'saved' && saved > 0 && <span className="dock-count">{saved}</span>}</>,
   }));
-  return <Dock items={items} panelHeight={62} baseItemSize={44} magnification={60} distance={150} dockHeight={88} />;
+  return <Dock items={items} panelHeight={58} baseItemSize={42} magnification={42} distance={120} dockHeight={76} />;
 }
 
 createRoot(document.getElementById('dock-root')).render(<VortexDock />);

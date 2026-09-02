@@ -28,9 +28,6 @@ const API_PLAYERS_SOURCE = "/api/players";
 const SAVED_KEY = "vortex_saved_prop_ids";
 const AVATAR_HUES = [168, 262, 24, 200, 330, 48, 140, 300];
 
-// Just names, not data -- every lookup still goes through the live API.
-const SUGGESTED_PLAYERS = ["Shohei Ohtani", "Freddie Freeman", "Aaron Judge"];
-
 // Standard MLB batter prop types, always offered for a batter even with no
 // static entry — the live API can compute any of these on demand.
 // "Strikeouts" here is the BATTER'S OWN strikeouts (as a hitter) -- a
@@ -171,7 +168,6 @@ async function init() {
   } catch (err) {
     console.error("wireChromeAutoHide failed:", err);
   }
-  wireCardBorderGlow();
   wireTabs();
   wireMainMenu();
 
@@ -182,14 +178,12 @@ async function init() {
     state.props = data.props || [];
   } catch (err) {
     console.error(err);
-    els.emptyState.innerHTML = `<span class="status-mark" aria-hidden="true"></span><span class="state-copy"><strong>Research is temporarily unavailable</strong><small>Try again shortly. The rest of the site remains available.</small></span>`;
+    els.emptyState.textContent = "Unable to load research. Refresh the page to try again.";
     state.props = [];
   }
 
-  clearIntroAnimations();
   wireSearch();
   wireLinePicker();
-  renderBrowseChips();
   wireSavedToolbar();
   renderSavedGrid();
   wireSlate();
@@ -211,7 +205,6 @@ function cacheEls() {
   els.searchResults = document.getElementById("search-results");
   els.reportWrap = document.getElementById("report-wrap");
   els.emptyState = document.getElementById("empty-state");
-  els.browseChips = document.getElementById("browse-chips");
   els.v2BackBtn = document.getElementById("v2-back-btn");
 
   els.playerProfile = document.getElementById("player-profile");
@@ -802,20 +795,6 @@ function renderAdminRecords() {
   }).join("") : "<p class=\"empty-state\">No settled results in this tab yet.</p>";
 }
 
-// The search bar / browse chips play a one-time fade-in (`.intro-anim`,
-// opacity:0 + `animation ... forwards`) on first load. If that animation is
-// ever re-triggered later -- which happens because the research tab panel
-// toggles display:none/block when switching tabs -- mobile Safari can drop
-// the replay and leave the element stuck invisible at its pre-animation
-// opacity:0 until something else forces a re-render. Stripping the class
-// once the intro has played means later tab switches never touch the
-// animation system again, so there's nothing left to get stuck.
-function clearIntroAnimations() {
-  setTimeout(() => {
-    document.querySelectorAll(".intro-anim").forEach((el) => el.classList.remove("intro-anim"));
-  }, 1200);
-}
-
 function moveIndicator(btn) {
   if (!btn) return;
   const tabsRect = els.tabs.getBoundingClientRect();
@@ -1295,26 +1274,6 @@ function renderResults(entries, { loading = false, fetchFailed = false } = {}) {
 
 function hideResults() {
   els.searchResults.hidden = true;
-}
-
-// Quick-start suggestions for the "Or jump straight to:" row. These are just
-// names, not data -- every lookup still goes through the live API, same as
-// typing a name and picking "search live". Static predictions.json now
-// ships with zero entries on purpose: any pre-baked demo data risked being
-// shown instead of a real live result whenever a stat/line happened to
-// match, which was actively misleading (e.g. a fabricated "Rockies"
-// matchup appearing for a real Padres game).
-
-function renderBrowseChips() {
-  els.browseChips.innerHTML = "";
-  SUGGESTED_PLAYERS.forEach((player) => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "browse-chip";
-    chip.textContent = player;
-    chip.addEventListener("click", () => selectPlayer(player));
-    els.browseChips.appendChild(chip);
-  });
 }
 
 /* ---------- Player profile: stat buttons + slide/type-in line picker ---------- */
@@ -2950,21 +2909,11 @@ function fillModelConfirm(node, p) {
   node.querySelector(".report-timestamp").textContent = formatDate(p.date);
 }
 
-/* ---------- Animated fills ---------- */
+/* ---------- Static chart values ---------- */
 
 function countUpScoreNum(node, score) {
   const el = node.querySelector(".score-num");
-  const target = Number(score) || 0;
-  const start = performance.now();
-  const duration = 900;
-  function tick(now) {
-    const t = Math.min(1, (now - start) / duration);
-    const eased = 1 - Math.pow(1 - t, 3);
-    el.textContent = Math.round(target * eased);
-    if (t < 1) requestAnimationFrame(tick);
-    else el.textContent = target;
-  }
-  requestAnimationFrame(tick);
+  el.textContent = Number(score) || 0;
 }
 
 function fillHitRateBars(node, rates) {
@@ -2976,9 +2925,7 @@ function fillHitRateBars(node, rates) {
     const fill = row.querySelector(".hr-fill");
     const pctLabel = row.querySelector(".hr-pct");
     pctLabel.textContent = `${val}%`;
-    requestAnimationFrame(() => {
-      fill.style.width = `${val}%`;
-    });
+    fill.style.width = `${val}%`;
   });
 }
 
@@ -3023,9 +2970,7 @@ function fillSparkline(node, entries, line) {
     holder.appendChild(col);
     const trackPx = 90;
     const heightPx = Math.max(24, (g.value / max) * trackPx);
-    requestAnimationFrame(() => {
-      bar.style.height = `${heightPx}px`;
-    });
+    bar.style.height = `${heightPx}px`;
   });
 
   // Dashed marker for the actual line being researched (e.g. 0.5, 1.5) —
@@ -3401,7 +3346,7 @@ async function loadV2Board(force = false) {
     els.v2BoardLoading.hidden = true;
 
     if (!res.ok || data.error) {
-      els.v2BoardError.innerHTML = `<span class="status-mark status-mark-error" aria-hidden="true"></span><span class="state-copy"><strong>Props are temporarily unavailable</strong><small>Refresh in a moment to try again.</small></span>`;
+      els.v2BoardError.textContent = "Unable to load props. Refresh to try again.";
       els.v2BoardError.hidden = false;
       return;
     }
@@ -3411,7 +3356,7 @@ async function loadV2Board(force = false) {
     renderBotBoard(data);
   } catch (err) {
     els.v2BoardLoading.hidden = true;
-    els.v2BoardError.innerHTML = `<span class="status-mark status-mark-error" aria-hidden="true"></span><span class="state-copy"><strong>Props are temporarily unavailable</strong><small>Refresh in a moment to try again.</small></span>`;
+    els.v2BoardError.textContent = "Unable to load props. Refresh to try again.";
     els.v2BoardError.hidden = false;
   } finally {
     els.v2RefreshBtn.classList.remove("is-loading");
@@ -4155,16 +4100,7 @@ function renderParlayView() {
 function countUpEl(id, target, { decimals = 0, duration = 1000, suffix = "" } = {}) {
   const el = document.getElementById(id);
   if (!el) return;
-  const start = performance.now();
-  function tick(now) {
-    const t = Math.min(1, (now - start) / duration);
-    const eased = 1 - Math.pow(1 - t, 3);
-    const value = target * eased;
-    el.textContent = `${value.toFixed(decimals)}${suffix}`;
-    if (t < 1) requestAnimationFrame(tick);
-    else el.textContent = `${target.toFixed(decimals)}${suffix}`;
-  }
-  requestAnimationFrame(tick);
+  el.textContent = `${target.toFixed(decimals)}${suffix}`;
 }
 
 /* ---------- Player Detail Modal (Silas-style) ---------- */

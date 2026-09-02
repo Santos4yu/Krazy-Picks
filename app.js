@@ -6,7 +6,6 @@
    Saved props persist locally via localStorage only.
    ========================================================= */
 
-import comingSoonLogoSrc from "./josoicon-transparent.png";
 
 /**
  * Single source of truth for where prop research data comes from.
@@ -24,6 +23,8 @@ const DATA_SOURCE = "/predictions.json";
  */
 const API_SOURCE = "/api/prediction";
 const API_PLAYERS_SOURCE = "/api/players";
+const API_PRIZEPICKS_EXPORT = "/api/prediction?action=prizepicks-export";
+const API_SLIP_ANALYZER = "/api/prediction?action=slip-analyzer";
 
 const SAVED_KEY = "vortex_saved_prop_ids";
 const AVATAR_HUES = [168, 262, 24, 200, 330, 48, 140, 300];
@@ -41,7 +42,7 @@ const BATTER_STATS = [
 // player is a pitcher (position "P").
 const PITCHER_STATS = [
   "Strikeouts (Pitcher)", "Pitching Outs", "Earned Runs Allowed",
-  "Hits Allowed", "Fantasy Score (Pitcher)",
+  "Hits Allowed", "Walks Allowed", "Fantasy Score (Pitcher)",
 ];
 
 // Combined list used only when a player's position isn't known yet (e.g.
@@ -73,9 +74,10 @@ const BOT_STAT_TO_RESEARCH_STAT = {
   "Outs": "Pitching Outs",
   "Hits Allowed": "Hits Allowed",
   "Earned Runs": "Earned Runs Allowed",
+  "Walks Allowed": "Walks Allowed",
 };
 // Bot labels that belong to the pitcher pipeline (position "P" in Research).
-const BOT_PITCHER_STATS = new Set(["Strikeouts", "Outs", "Hits Allowed", "Earned Runs"]);
+const BOT_PITCHER_STATS = new Set(["Strikeouts", "Outs", "Hits Allowed", "Earned Runs", "Walks Allowed"]);
 
 const STAT_DEFAULT_LINE = {
   "Hits+Runs+RBIs": 1.5,
@@ -91,6 +93,7 @@ const STAT_DEFAULT_LINE = {
   "Pitching Outs": 15.5,
   "Earned Runs Allowed": 2.5,
   "Hits Allowed": 5.5,
+  "Walks Allowed": 1.5,
   "Fantasy Score (Pitcher)": 15.5,
 };
 
@@ -110,6 +113,7 @@ const state = {
   v2BoardData: null,
   v2RenderedProps: [],
   boardFilter: "all",
+  matchupDisplayLimit: 40,
   builderLegs: 2,
   builderMode: "safe",
   builderResult: [],
@@ -127,21 +131,25 @@ const state = {
 const els = {};
 
 const THEME_KEY = "vortex_theme_mode";
-const ACCENT_KEY = "vortex_theme_accent";
-const CUSTOM_ACCENT_KEY = "vortex_theme_custom_hex";
 // Mirrors --bg per data-theme in styles.css -- must be declared before the
 // applyTheme() call below (which runs at script top-level, immediately),
 // not down near the function definition, or it's a temporal-dead-zone
-// ReferenceError the instant this file loads (same class of bug as
-// CUSTOM_ACCENT_KEY earlier -- a top-level call reaching a later `const`
-// before the script has "gotten there" in top-to-bottom execution).
-const THEME_BG = { dark: "#101114", grey: "#2a2b30", light: "#f3f3f4" };
-applyTheme(localStorage.getItem(THEME_KEY) || "dark");
-applyAccent(localStorage.getItem(ACCENT_KEY) || "amber");
+// ReferenceError the instant this file loads when a top-level call reaches a
+// later `const` before the script gets there in top-to-bottom execution.
+const THEME_BG = {
+  obsidian: "#050505", midnight: "#07101f", forest: "#07130f",
+  burgundy: "#16090d", ivory: "#f3efe7", violet: "#100a1c",
+  ocean: "#041719", amber: "#1a1005",
+};
+const LEGACY_THEMES = { dark: "obsidian", grey: "midnight", light: "ivory" };
+const initialTheme = localStorage.getItem(THEME_KEY) || "obsidian";
+applyTheme(LEGACY_THEMES[initialTheme] || initialTheme);
+applyExperience(false);
 
 init();
 
 async function init() {
+  const loaderStartedAt = performance.now();
   cacheEls();
   try {
     await checkAuth();
@@ -185,16 +193,19 @@ async function init() {
   wireSearch();
   wireLinePicker();
   wireSavedToolbar();
+  wireManualBetSlip();
   renderSavedGrid();
   wireSlate();
   wireV2Board();
   wireParlayBuilder();
+  wireSlipAnalyzer();
   wireAdminPanel();
   wireSidePanel();
   wireSpecialMarkets();
   wirePlayerDetailModal();
   updateSavedCount();
   updateParlayBar();
+  await finishPrivateLoader(loaderStartedAt);
   const warmSlate = () => requestSlateData(false).catch(() => {});
   if ("requestIdleCallback" in window) requestIdleCallback(warmSlate, { timeout: 2200 });
   else setTimeout(warmSlate, 900);
@@ -224,6 +235,9 @@ function cacheEls() {
   els.lineStepDown = document.getElementById("line-step-down");
   els.lineStepUp = document.getElementById("line-step-up");
   els.lineNoData = document.getElementById("line-no-data");
+  els.ppLinesWrap = document.getElementById("pp-lines-wrap");
+  els.ppLinesTrigger = document.getElementById("pp-lines-trigger");
+  els.ppLinesMenu = document.getElementById("pp-lines-menu");
 
   els.tabs = document.getElementById("tabs");
   els.tabIndicator = document.getElementById("tab-indicator");
@@ -241,6 +255,7 @@ function cacheEls() {
 
   els.panelV2 = document.getElementById("panel-v2");
   els.panelBuilder = document.getElementById("panel-builder");
+  els.panelSlip = document.getElementById("panel-slip");
   els.panelMoneyline = document.getElementById("panel-moneyline");
   els.panelNrfi = document.getElementById("panel-nrfi");
   els.panelAdmin = document.getElementById("panel-admin");
@@ -259,7 +274,6 @@ function cacheEls() {
   els.sideMenuClose = document.getElementById("side-menu-close");
   els.v2BoardList = document.getElementById("v2-board-list");
   els.v2BoardEmpty = document.getElementById("v2-board-empty");
-  els.v2BoardLoading = document.getElementById("v2-board-loading");
   els.v2BoardError = document.getElementById("v2-board-error");
   els.v2BoardDate = document.getElementById("v2-board-date");
   els.v2RefreshBtn = document.getElementById("v2-refresh-btn");
@@ -275,6 +289,12 @@ function cacheEls() {
   els.builderGenerate = document.getElementById("builder-generate");
   els.builderStatus = document.getElementById("builder-status");
   els.builderResult = document.getElementById("builder-result");
+  els.slipFileInput = document.getElementById("slip-file-input");
+  els.slipUploadZone = document.getElementById("slip-upload-zone");
+  els.slipFileStatus = document.getElementById("slip-file-status");
+  els.slipPasteBtn = document.getElementById("slip-paste-btn");
+  els.slipGradeBtn = document.getElementById("slip-grade-btn");
+  els.slipAnalysisResult = document.getElementById("slip-analysis-result");
 
   els.v2PinOverlay = document.getElementById("v2-pin-overlay");
   els.v2PinInput = document.getElementById("v2-pin-input");
@@ -300,6 +320,18 @@ function cacheEls() {
   els.parlayCompareBtn = document.getElementById("parlay-compare-btn");
   els.parlayView = document.getElementById("parlay-view");
 
+  els.headerBuilderTrigger = document.getElementById("header-builder-trigger");
+  els.headerBuilderCount = document.getElementById("header-builder-count");
+  els.betSlipScrim = document.getElementById("bet-slip-scrim");
+  els.betSlipDrawer = document.getElementById("bet-slip-drawer");
+  els.betSlipClose = document.getElementById("bet-slip-close");
+  els.betSlipHeadline = document.getElementById("bet-slip-headline");
+  els.betSlipLegs = document.getElementById("bet-slip-legs");
+  els.betSlipEmpty = document.getElementById("bet-slip-empty");
+  els.betSlipStatus = document.getElementById("bet-slip-status");
+  els.betSlipClear = document.getElementById("bet-slip-clear");
+  els.betSlipExport = document.getElementById("bet-slip-export");
+
   els.toastStack = document.getElementById("toast-stack");
 
   els.appShell = document.getElementById("app-shell");
@@ -312,11 +344,13 @@ function cacheEls() {
   els.settingsBtn = document.getElementById("settings-btn");
   els.settingsPanel = document.getElementById("settings-panel");
   els.modeRow = document.getElementById("mode-row");
-  els.accentRow = document.getElementById("accent-row");
-  els.customAccentInput = document.getElementById("custom-accent-input");
+  els.experienceToggle = document.getElementById("experience-toggle");
 
   els.gamelogOverlay = document.getElementById("gamelog-overlay");
   els.gamelogTitle = document.getElementById("gamelog-title");
+  els.gamelogPropBadge = document.getElementById("gamelog-prop-badge");
+  els.gamelogTeamMark = document.getElementById("gamelog-team-mark");
+  els.gamelogPlayerCutout = document.getElementById("gamelog-player-cutout");
   els.gamelogClose = document.getElementById("gamelog-close");
   els.gamelogTabs = document.getElementById("gamelog-tabs");
   els.gamelogSub = document.getElementById("gamelog-sub");
@@ -324,7 +358,22 @@ function cacheEls() {
   els.gamelogSubfilters = document.getElementById("gamelog-subfilters");
   els.glHandFilter = document.getElementById("gl-hand-filter");
   els.glVenueFilter = document.getElementById("gl-venue-filter");
-  els.gamelogStat = document.getElementById("gamelog-stat");
+  els.gamelogStatTabs = document.getElementById("gamelog-stat-tabs");
+  els.gamelogLineDown = document.getElementById("gamelog-line-down");
+  els.gamelogLineUp = document.getElementById("gamelog-line-up");
+  els.gamelogLineValue = document.getElementById("gamelog-line-value");
+  els.gamelogFilterToggle = document.getElementById("gamelog-filter-toggle");
+  els.gamelogFilterClose = document.getElementById("gamelog-filter-close");
+  els.gamelogFilterPanel = document.getElementById("gamelog-filter-panel");
+  els.gamelogStudio = document.getElementById("gamelog-studio");
+  els.gamelogSeasonRow = document.getElementById("gamelog-season-row");
+  els.gamelogPresetRow = document.getElementById("gamelog-preset-row");
+  els.gamelogGamesDown = document.getElementById("gamelog-games-down");
+  els.gamelogGamesUp = document.getElementById("gamelog-games-up");
+  els.gamelogGamesCount = document.getElementById("gamelog-games-count");
+  els.gamelogWindowLabel = document.getElementById("gamelog-window-label");
+  els.gamelogH2HToggle = document.getElementById("gamelog-h2h-toggle");
+  els.gamelogFilterCount = document.getElementById("gamelog-filter-count");
 
   els.teamOverlay = document.getElementById("team-overlay");
   els.teamTitle = document.getElementById("team-title");
@@ -362,40 +411,11 @@ function applyTheme(mode) {
   if (meta && THEME_BG[mode]) meta.setAttribute("content", THEME_BG[mode]);
 }
 
-function hexToRgb(hex) {
-  const clean = hex.replace("#", "");
-  const n = parseInt(clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean, 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-}
-
-function mixWithWhite(hex, amount) {
-  const { r, g, b } = hexToRgb(hex);
-  const mix = (c) => Math.round(c + (255 - c) * amount);
-  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
-}
-
-function applyAccent(accent, customHex) {
-  document.documentElement.setAttribute("data-accent", accent);
-  localStorage.setItem(ACCENT_KEY, accent);
-
-  if (accent === "custom" && customHex) {
-    const { r, g, b } = hexToRgb(customHex);
-    document.documentElement.style.setProperty("--accent", customHex);
-    document.documentElement.style.setProperty("--accent-soft", mixWithWhite(customHex, 0.45));
-    document.documentElement.style.setProperty("--accent-dim", `rgba(${r}, ${g}, ${b}, 0.16)`);
-    localStorage.setItem(CUSTOM_ACCENT_KEY, customHex);
-    els.customAccentInput.value = customHex;
-  } else {
-    // Preset accents are driven purely by the [data-accent] CSS rules —
-    // clear any inline overrides left over from a previous custom pick.
-    document.documentElement.style.removeProperty("--accent");
-    document.documentElement.style.removeProperty("--accent-soft");
-    document.documentElement.style.removeProperty("--accent-dim");
-  }
-
-  document.querySelectorAll(".swatch-btn").forEach((b) => {
-    b.classList.toggle("active", b.dataset.accent === accent);
-  });
+function applyExperience(enabled) {
+  document.documentElement.removeAttribute("data-jarvis");
+  const toggle = document.getElementById("experience-toggle");
+  if (toggle) toggle.checked = enabled;
+  window.dispatchEvent(new CustomEvent("private:experience-change", { detail: { enabled: false } }));
 }
 
 /* ---------- Keep navigation out of the way once the reader leaves the top ---------- */
@@ -423,7 +443,6 @@ function wireChromeAutoHide() {
 /* ---------- Border glow for every card surface ---------- */
 
 const CARD_GLOW_SELECTOR = [
-  ".search-box",
   ".player-profile", ".report-block", ".report-card", ".slate-card",
   ".slate-row", ".saved-card", ".v2-card", ".board-card",
   ".market-card", ".market-page-head",
@@ -468,12 +487,8 @@ function wireCardBorderGlow() {
 }
 
 function wireSettingsPanel() {
-  const savedMode = localStorage.getItem(THEME_KEY) || "dark";
-  const savedAccent = localStorage.getItem(ACCENT_KEY) || "amber";
-  const savedCustomHex = localStorage.getItem(CUSTOM_ACCENT_KEY) || "#35e0c4";
-  applyTheme(savedMode);
-  els.customAccentInput.value = savedCustomHex;
-  applyAccent(savedAccent, savedCustomHex);
+  const savedMode = localStorage.getItem(THEME_KEY) || "obsidian";
+  applyTheme(LEGACY_THEMES[savedMode] || savedMode);
 
   // 5 rapid clicks on the settings gear opens the hidden admin PIN prompt
   // instead of the normal theme panel -- the PIN itself is never checked
@@ -506,22 +521,29 @@ function wireSettingsPanel() {
   els.modeRow.querySelectorAll(".mode-btn").forEach((btn) => {
     btn.addEventListener("click", () => applyTheme(btn.dataset.mode));
   });
-  els.accentRow.querySelectorAll(".swatch-btn:not(.swatch-wheel)").forEach((btn) => {
-    btn.addEventListener("click", () => applyAccent(btn.dataset.accent));
-  });
-  els.customAccentInput.addEventListener("input", () => {
-    applyAccent("custom", els.customAccentInput.value);
-  });
+  if (els.experienceToggle) {
+    els.experienceToggle.checked = document.documentElement.hasAttribute("data-jarvis");
+    els.experienceToggle.addEventListener("change", () => {
+      applyExperience(els.experienceToggle.checked);
+      showToast(
+        els.experienceToggle.checked ? "Jarvis Interface online" : "Jarvis Interface standing by",
+        "default",
+        els.experienceToggle.checked ? "Cinematic motion systems activated." : "Returned to the focused interface."
+      );
+    });
+  }
 }
 
 /* ---------- Tabs ---------- */
 
 function wireTabs() {
-  els.tabs.querySelectorAll(".tab-btn").forEach((btn, i) => {
-    btn.addEventListener("click", () => switchTab(btn.dataset.tab, btn));
-  });
-  requestAnimationFrame(() => moveIndicator(els.tabs.querySelector(".tab-btn.active")));
-  window.addEventListener("resize", () => moveIndicator(els.tabs.querySelector(".tab-btn.active")));
+  if (!els.tabs.dataset.reactTabs) {
+    els.tabs.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => switchTab(btn.dataset.tab, btn));
+    });
+    requestAnimationFrame(() => moveIndicator(els.tabs.querySelector(".tab-btn.active")));
+    window.addEventListener("resize", () => moveIndicator(els.tabs.querySelector(".tab-btn.active")));
+  }
 
   const bottomNav = document.getElementById("bottom-nav");
   if (bottomNav) {
@@ -561,8 +583,8 @@ function switchTab(tab) {
     return;
   }
   state.currentTab = tab;
-  els.tabs.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-  const topBtn = els.tabs.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  els.tabs.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  const topBtn = els.tabs.querySelector(`[data-tab="${tab}"]`);
   if (topBtn) moveIndicator(topBtn);
 
   const bottomNav = document.getElementById("bottom-nav");
@@ -572,7 +594,7 @@ function switchTab(tab) {
 
   const homeModeSwitch = document.getElementById("home-mode-switch");
   if (homeModeSwitch) {
-    const isHomeMode = tab === "research" || tab === "moneyline";
+    const isHomeMode = tab === "research";
     homeModeSwitch.hidden = !isHomeMode;
     homeModeSwitch.querySelectorAll("[data-home-tab]").forEach((b) => {
       b.classList.toggle("active", b.dataset.homeTab === tab);
@@ -583,6 +605,7 @@ function switchTab(tab) {
   els.panelSlate.hidden = tab !== "slate";
   els.panelV2.hidden = tab !== "v2";
   els.panelBuilder.hidden = tab !== "builder";
+  els.panelSlip.hidden = tab !== "slip";
   els.panelMoneyline.hidden = tab !== "moneyline";
   els.panelNrfi.hidden = tab !== "nrfi";
   els.panelAdmin.hidden = tab !== "admin";
@@ -691,7 +714,7 @@ function renderMoneylineResearch(games) {
       : "No bet — the model has not found a qualified, actionable edge.";
   const weatherText = typeof weather === "string" ? weather : (weather.dome ? "Indoor / roof context" : [weather.temperature, weather.speed_mph ? `${weather.speed_mph} mph wind` : ""].filter(Boolean).join(" · ") || "Weather pending");
   picker.innerHTML = games.map((item) => `<button class="ml-game-choice ${String(item.game_pk) === String(game.game_pk) ? "active" : ""}" data-ml-game="${escapeHtml(String(item.game_pk))}"><span>${escapeHtml(item.away_abbr || item.away_team || "AWY")} @ ${escapeHtml(item.home_abbr || item.home_team || "HME")}</span><small>${item.lineups_confirmed ? "confirmed" : "pre-game"}</small></button>`).join("");
-  report.innerHTML = `<div class="ml-matchup-head"><div><p class="eyebrow">${readiness.toUpperCase()}</p><h3>${escapeHtml(team)} <span>vs ${escapeHtml(opponent)}</span></h3><p>${escapeHtml(pitcher)} vs ${escapeHtml(oppPitcher)} · ${moneylineGameTime(game.commence_time)}</p></div><div class="ml-side-toggle" role="group" aria-label="Team to research"><button class="${selected === "away" ? "active" : ""}" data-ml-side="away">${escapeHtml(game.away_abbr || "Away")}</button><button class="${selected === "home" ? "active" : ""}" data-ml-side="home">${escapeHtml(game.home_abbr || "Home")}</button></div></div><div class="ml-score-row"><div class="ml-score"><span>KRAZY PICKS WIN</span><strong>${Number.isFinite(model) ? `${model.toFixed(1)}%` : "—"}</strong><small>${isV5 ? (isModelSide ? "model-selected side" : "your selected side") : "awaiting v5 refresh"}</small></div><div class="ml-score"><span>MARKET</span><strong>${Number.isFinite(market) ? market.toFixed(1) : "—"}%</strong><small>${moneylineValue(game[`${selected}_odds`], "—")} odds</small></div><div class="ml-score ${edge !== null && edge >= 0 ? "positive" : ""}"><span>PRICING GAP</span><strong>${edge === null ? "—" : `${edge >= 0 ? "+" : ""}${edge.toFixed(1)}%`}</strong><small>${edge !== null && edge >= 0 ? "model above price" : "awaiting current model"}</small></div></div><div class="ml-evidence"><article><span>STARTER</span><strong>${escapeHtml(pitcher)}</strong><p>FIP ${moneylineDecimal(game[`${selected}_fip`])} · opponent: ${escapeHtml(oppPitcher)}</p></article><article><span>TEAM FORM</span><strong>${moneylineValue(game[`${selected}_record`])}</strong><p>${moneylineValue(offense.wrc_plus || offense.wrc)} wRC+ · ${moneylineValue(offense.iso)} ISO · ${moneylineValue(offense.bb_pct)}% BB</p></article><article><span>BULLPEN</span><strong>${moneylineDecimal(bullpen.era)} ERA</strong><p>${moneylineValue(bullpen.fatigued_count, "0")} fatigued arms · late-game context</p></article><article><span>CONTEXT</span><strong>${moneylineDecimal(game.park_factor)} park factor</strong><p>${escapeHtml(game.weather || "Weather not available")}</p></article></div><div class="ml-verdict"><span>${edge !== null && edge >= 0 ? "KRAZY PICKS LEAN" : "CAUTION"}</span><p>${escapeHtml(game.insight || "The model is weighing starters, team quality, bullpen condition, market price, park and game context.")}</p></div>`;
+  report.innerHTML = `<div class="ml-matchup-head"><div><p class="eyebrow">${readiness.toUpperCase()}</p><h3>${escapeHtml(team)} <span>vs ${escapeHtml(opponent)}</span></h3><p>${escapeHtml(pitcher)} vs ${escapeHtml(oppPitcher)} · ${moneylineGameTime(game.commence_time)}</p></div><div class="ml-side-toggle" role="group" aria-label="Team to research"><button class="${selected === "away" ? "active" : ""}" data-ml-side="away">${escapeHtml(game.away_abbr || "Away")}</button><button class="${selected === "home" ? "active" : ""}" data-ml-side="home">${escapeHtml(game.home_abbr || "Home")}</button></div></div><div class="ml-score-row"><div class="ml-score"><span>MODEL WIN</span><strong>${Number.isFinite(model) ? `${model.toFixed(1)}%` : "—"}</strong><small>${isV5 ? (isModelSide ? "model-selected side" : "your selected side") : "awaiting v5 refresh"}</small></div><div class="ml-score"><span>MARKET</span><strong>${Number.isFinite(market) ? market.toFixed(1) : "—"}%</strong><small>${moneylineValue(game[`${selected}_odds`], "—")} odds</small></div><div class="ml-score ${edge !== null && edge >= 0 ? "positive" : ""}"><span>PRICING GAP</span><strong>${edge === null ? "—" : `${edge >= 0 ? "+" : ""}${edge.toFixed(1)}%`}</strong><small>${edge !== null && edge >= 0 ? "model above price" : "awaiting current model"}</small></div></div><div class="ml-evidence"><article><span>STARTER</span><strong>${escapeHtml(pitcher)}</strong><p>FIP ${moneylineDecimal(game[`${selected}_fip`])} · opponent: ${escapeHtml(oppPitcher)}</p></article><article><span>TEAM FORM</span><strong>${moneylineValue(game[`${selected}_record`])}</strong><p>${moneylineValue(offense.wrc_plus || offense.wrc)} wRC+ · ${moneylineValue(offense.iso)} ISO · ${moneylineValue(offense.bb_pct)}% BB</p></article><article><span>BULLPEN</span><strong>${moneylineDecimal(bullpen.era)} ERA</strong><p>${moneylineValue(bullpen.fatigued_count, "0")} fatigued arms · late-game context</p></article><article><span>CONTEXT</span><strong>${moneylineDecimal(game.park_factor)} park factor</strong><p>${escapeHtml(game.weather || "Weather not available")}</p></article></div><div class="ml-verdict"><span>${edge !== null && edge >= 0 ? "MODEL LEAN" : "CAUTION"}</span><p>${escapeHtml(game.insight || "The model is weighing starters, team quality, bullpen condition, market price, park and game context.")}</p></div>`;
   const baseScore = isV5 ? Number(game.moneyline_score) : NaN;
   const shownScore = Number.isFinite(baseScore) ? (isModelSide ? baseScore : 100 - baseScore) : null;
   const scoreLabel = shownScore === null ? (isV5 ? "Pending" : "Refresh required") : shownScore >= 67 ? "Favorable" : shownScore <= 33 ? "Unfavorable" : "Neutral";
@@ -747,7 +770,7 @@ function renderMoneylineResearch(games) {
   const stat = (profile, key) => moneylineValue(profile[key]);
   const arsenal = (profile) => (profile.arsenal || []).map((pitch) => `${escapeHtml(pitch.pitch_name || pitch.pitch_type || "Pitch")} ${moneylineValue(pitch.pct)}%`).join(" · ") || "Pitch mix pending";
   const recent = (profile) => (profile.recent_starts || []).map((start) => `${escapeHtml(start.ip || "—")} IP · ${moneylineValue(start.k)} K · ${moneylineValue(start.er)} ER`).join("<br>") || "Recent-start log pending";
-  report.insertAdjacentHTML("beforeend", `<section class="ml-workbench"><div class="ml-workbench-title"><div><span>RESEARCH WORKBENCH</span><h4>Compare the matchup yourself</h4></div><p>Raw data is separate from Krazy Picks' recommendation.</p></div><div class="ml-research-section"><h5>Starting pitchers</h5><div class="ml-compare"><article><b>${escapeHtml(game.away_abbr || "Away")} · ${escapeHtml(awayStarter.name || game.away_pitcher || "TBD")}</b><div class="ml-stat-lines"><span>ERA <strong>${stat(awayStarter,"era")}</strong></span><span>FIP <strong>${stat(awayStarter,"fip")}</strong></span><span>WHIP <strong>${stat(awayStarter,"whip")}</strong></span><span>K/9 <strong>${stat(awayStarter,"k_per_9")}</strong></span><span>BB/9 <strong>${stat(awayStarter,"bb_per_9")}</strong></span><span>HR/9 <strong>${stat(awayStarter,"hr_per_9")}</strong></span></div><p><em>Arsenal</em> ${arsenal(awayStarter)}</p><p><em>Last starts</em><br>${recent(awayStarter)}</p></article><article><b>${escapeHtml(game.home_abbr || "Home")} · ${escapeHtml(homeStarter.name || game.home_pitcher || "TBD")}</b><div class="ml-stat-lines"><span>ERA <strong>${stat(homeStarter,"era")}</strong></span><span>FIP <strong>${stat(homeStarter,"fip")}</strong></span><span>WHIP <strong>${stat(homeStarter,"whip")}</strong></span><span>K/9 <strong>${stat(homeStarter,"k_per_9")}</strong></span><span>BB/9 <strong>${stat(homeStarter,"bb_per_9")}</strong></span><span>HR/9 <strong>${stat(homeStarter,"hr_per_9")}</strong></span></div><p><em>Arsenal</em> ${arsenal(homeStarter)}</p><p><em>Last starts</em><br>${recent(homeStarter)}</p></article></div></div><div class="ml-research-section"><h5>Offense and bullpen</h5><div class="ml-compare">${[[game.away_abbr || "Away", game.away_offense || {}, game.away_bullpen || {}], [game.home_abbr || "Home", game.home_offense || {}, game.home_bullpen || {}]].map(([abbr, off, pen]) => `<article><b>${escapeHtml(abbr)}</b><div class="ml-stat-lines"><span>wRC+ <strong>${moneylineValue(off.wrc_plus)}</strong></span><span>ISO <strong>${moneylineValue(off.iso)}</strong></span><span>BB% <strong>${moneylineValue(off.bb_pct)}</strong></span><span>K% <strong>${moneylineValue(off.k_pct)}</strong></span><span>Runs/G <strong>${moneylineValue(off.runs_pg)}</strong></span><span>BP ERA <strong>${moneylineValue(pen.era)}</strong></span></div><p><em>Bullpen</em> ${moneylineValue(pen.whip)} WHIP · ${moneylineValue(pen.hr9)} HR/9 · ${moneylineValue(pen.fatigued_count,"0")} fatigued arms</p></article>`).join("")}</div></div><div class="ml-research-section"><h5>Game context</h5><div class="ml-context-data"><span>Park factor <strong>${moneylineValue(game.park_factor)}</strong></span><span>Weather <strong>${escapeHtml(weatherText)}</strong></span><span>Lineups <strong>${game.lineups_confirmed ? "Confirmed" : "Projected"}</strong></span><span>Volatility <strong>${escapeHtml(game.volatility || "—")} ${moneylineValue(game.volatility_score)}/100</strong></span></div></div></section>`);
+  report.insertAdjacentHTML("beforeend", `<section class="ml-workbench"><div class="ml-workbench-title"><div><span>RESEARCH WORKBENCH</span><h4>Compare the matchup yourself</h4></div><p>Raw data is separate from the model recommendation.</p></div><div class="ml-research-section"><h5>Starting pitchers</h5><div class="ml-compare"><article><b>${escapeHtml(game.away_abbr || "Away")} · ${escapeHtml(awayStarter.name || game.away_pitcher || "TBD")}</b><div class="ml-stat-lines"><span>ERA <strong>${stat(awayStarter,"era")}</strong></span><span>FIP <strong>${stat(awayStarter,"fip")}</strong></span><span>WHIP <strong>${stat(awayStarter,"whip")}</strong></span><span>K/9 <strong>${stat(awayStarter,"k_per_9")}</strong></span><span>BB/9 <strong>${stat(awayStarter,"bb_per_9")}</strong></span><span>HR/9 <strong>${stat(awayStarter,"hr_per_9")}</strong></span></div><p><em>Arsenal</em> ${arsenal(awayStarter)}</p><p><em>Last starts</em><br>${recent(awayStarter)}</p></article><article><b>${escapeHtml(game.home_abbr || "Home")} · ${escapeHtml(homeStarter.name || game.home_pitcher || "TBD")}</b><div class="ml-stat-lines"><span>ERA <strong>${stat(homeStarter,"era")}</strong></span><span>FIP <strong>${stat(homeStarter,"fip")}</strong></span><span>WHIP <strong>${stat(homeStarter,"whip")}</strong></span><span>K/9 <strong>${stat(homeStarter,"k_per_9")}</strong></span><span>BB/9 <strong>${stat(homeStarter,"bb_per_9")}</strong></span><span>HR/9 <strong>${stat(homeStarter,"hr_per_9")}</strong></span></div><p><em>Arsenal</em> ${arsenal(homeStarter)}</p><p><em>Last starts</em><br>${recent(homeStarter)}</p></article></div></div><div class="ml-research-section"><h5>Offense and bullpen</h5><div class="ml-compare">${[[game.away_abbr || "Away", game.away_offense || {}, game.away_bullpen || {}], [game.home_abbr || "Home", game.home_offense || {}, game.home_bullpen || {}]].map(([abbr, off, pen]) => `<article><b>${escapeHtml(abbr)}</b><div class="ml-stat-lines"><span>wRC+ <strong>${moneylineValue(off.wrc_plus)}</strong></span><span>ISO <strong>${moneylineValue(off.iso)}</strong></span><span>BB% <strong>${moneylineValue(off.bb_pct)}</strong></span><span>K% <strong>${moneylineValue(off.k_pct)}</strong></span><span>Runs/G <strong>${moneylineValue(off.runs_pg)}</strong></span><span>BP ERA <strong>${moneylineValue(pen.era)}</strong></span></div><p><em>Bullpen</em> ${moneylineValue(pen.whip)} WHIP · ${moneylineValue(pen.hr9)} HR/9 · ${moneylineValue(pen.fatigued_count,"0")} fatigued arms</p></article>`).join("")}</div></div><div class="ml-research-section"><h5>Game context</h5><div class="ml-context-data"><span>Park factor <strong>${moneylineValue(game.park_factor)}</strong></span><span>Weather <strong>${escapeHtml(weatherText)}</strong></span><span>Lineups <strong>${game.lineups_confirmed ? "Confirmed" : "Projected"}</strong></span><span>Volatility <strong>${escapeHtml(game.volatility || "—")} ${moneylineValue(game.volatility_score)}/100</strong></span></div></div></section>`);
   const offenseSection = [...report.querySelectorAll(".ml-research-section")].find((section) => section.querySelector("h5")?.textContent === "Offense and bullpen");
   if (offenseSection) {
     const cards = offenseSection.querySelectorAll(".ml-compare article");
@@ -795,8 +818,22 @@ function renderAdminRecords() {
   }).join("") : "<p class=\"empty-state\">No settled results in this tab yet.</p>";
 }
 
+// The search bar / browse chips play a one-time fade-in (`.intro-anim`,
+// opacity:0 + `animation ... forwards`) on first load. If that animation is
+// ever re-triggered later -- which happens because the research tab panel
+// toggles display:none/block when switching tabs -- mobile Safari can drop
+// the replay and leave the element stuck invisible at its pre-animation
+// opacity:0 until something else forces a re-render. Stripping the class
+// once the intro has played means later tab switches never touch the
+// animation system again, so there's nothing left to get stuck.
+function clearIntroAnimations() {
+  setTimeout(() => {
+    document.querySelectorAll(".intro-anim").forEach((el) => el.classList.remove("intro-anim"));
+  }, 1200);
+}
+
 function moveIndicator(btn) {
-  if (!btn) return;
+  if (!btn || !els.tabIndicator) return;
   const tabsRect = els.tabs.getBoundingClientRect();
   const btnRect = btn.getBoundingClientRect();
   els.tabIndicator.style.width = `${btnRect.width}px`;
@@ -835,17 +872,21 @@ function avatarHtml(playerOrProp, size = "") {
   // Initials render underneath; if the photo loads it covers them, if it
   // fails onerror removes the img and the initials fallback shows through.
   const img = headshot
-    ? `<img src="${escapeHtml(headshot)}" alt="" loading="lazy" onerror="this.remove()">`
+    ? `<img src="${escapeHtml(headshot)}" alt="" loading="eager" fetchpriority="high" onerror="this.remove()">`
     : "";
-  return `<div class="avatar${sizeClass}${headshot ? " avatar-cutout" : ""}" style="background:linear-gradient(135deg, hsl(${hue} 80% 55%), hsl(${hue2} 80% 45%))">${escapeHtml(initials)}${img}</div>`;
+  return `<div class="avatar${sizeClass}${headshot ? " avatar-cutout" : ""}">${escapeHtml(initials)}${img}</div>`;
+}
+
+function teamLogoHtml(teamId, teamName = "", className = "team-logo") {
+  if (!teamId) return "";
+  return `<img class="${className}" src="https://www.mlbstatic.com/team-logos/${Number(teamId)}.svg" alt="${escapeHtml(teamName)}" loading="lazy">`;
 }
 
 /* ---------- Auth gate (Discord OAuth + Premium/Tester role) ---------- */
 
 async function checkAuth() {
-  // Krazy Picks is public. Keep the old OAuth implementation below dormant
+  // Private Research is public. Keep the old OAuth implementation below dormant
   // so no login request, Discord membership check, or account UI is used.
-  els.appShell.classList.remove("app-shell-hidden");
   return;
 
   // The OAuth callback redirects back here with ?auth=success|denied|error
@@ -889,15 +930,32 @@ async function checkAuth() {
   els.authGate.hidden = false;
 }
 
-function showToast(message, variant = "default") {
+function showToast(message, variant = "default", detail = "") {
   const toast = document.createElement("div");
   toast.className = `toast${variant === "warn" ? " toast-warn" : ""}`;
-  toast.textContent = message;
+  const icon = document.createElement("span");
+  icon.className = "toast-icon";
+  icon.textContent = variant === "warn" ? "!" : "✓";
+  const copy = document.createElement("span");
+  copy.className = "toast-copy";
+  const title = document.createElement("strong");
+  title.textContent = message;
+  copy.appendChild(title);
+  if (detail) {
+    const secondary = document.createElement("small");
+    secondary.textContent = detail;
+    copy.appendChild(secondary);
+  }
+  toast.append(icon, copy);
   els.toastStack.appendChild(toast);
+  // Always remove on a timer as well as animationend. Jarvis' entrance
+  // animation uses !important, which can otherwise prevent toast-out from
+  // firing and leave this status card stuck on screen.
   setTimeout(() => {
     toast.classList.add("leaving");
     toast.addEventListener("animationend", () => toast.remove(), { once: true });
-  }, 2200);
+    setTimeout(() => toast.remove(), 420);
+  }, 1800);
 }
 
 /* ---------- Saved props (localStorage) ----------
@@ -926,10 +984,15 @@ function isSaved(id) {
 function toggleSave(prop, btnEl) {
   if (isSaved(prop.id)) {
     state.savedProps.delete(prop.id);
-    showToast(`Removed ${prop.player} from saved props`, "warn");
+    state.parlaySelection.delete(prop.id);
+    showToast(`Removed ${prop.player} from the prop builder`, "warn");
   } else {
+    if (state.savedProps.size >= 6) {
+      showToast("PrizePicks allows up to 6 legs. Remove one from the builder first.", "warn");
+      return;
+    }
     state.savedProps.set(prop.id, prop);
-    showToast(`Saved ${prop.player} — ${prop.side} ${prop.line} ${prop.betType}`);
+    showToast("Added to Prop Builder", "default", `${prop.player} · ${prop.side} ${prop.line} ${prop.betType}`);
   }
   persistSaved();
   updateSavedCount();
@@ -945,17 +1008,34 @@ function toggleSave(prop, btnEl) {
 function syncSaveButton(btnEl, id) {
   const saved = isSaved(id);
   btnEl.classList.toggle("saved", saved);
-  btnEl.querySelector(".save-btn-label").textContent = saved ? "Saved" : "Save";
+  const label = btnEl.querySelector(".save-btn-label");
+  if (label) label.textContent = saved ? "In Builder" : "Add to Builder";
+  else btnEl.textContent = saved ? "in builder" : "add to builder";
 }
 
 function updateSavedCount() {
-  els.savedCount.textContent = state.savedProps.size;
+  if (els.savedCount) els.savedCount.textContent = state.savedProps.size;
   const bc = document.getElementById("bottom-saved-count");
   if (bc) {
     bc.textContent = state.savedProps.size;
     bc.hidden = state.savedProps.size === 0;
   }
   window.dispatchEvent(new CustomEvent("vortex:dock-sync", { detail: { tab: state.currentTab, saved: state.savedProps.size } }));
+  renderManualBetSlip();
+}
+
+async function finishPrivateLoader(startedAt) {
+  const minimumDisplayMs = 1500;
+  const elapsed = performance.now() - startedAt;
+  if (elapsed < minimumDisplayMs) {
+    await new Promise((resolve) => setTimeout(resolve, minimumDisplayMs - elapsed));
+  }
+
+  els.appShell.classList.remove("app-shell-hidden");
+  const loader = document.getElementById("boot-loading");
+  if (!loader) return;
+  loader.classList.add("private-loader-leaving");
+  window.setTimeout(() => loader.remove(), 700);
 }
 
 function propLiveActual(row) {
@@ -1037,17 +1117,9 @@ function wireSearch() {
   els.searchInput.addEventListener("input", onSearchInput);
   els.searchInput.addEventListener("focus", onSearchInput);
   els.searchInput.addEventListener("keydown", onSearchKeydown);
-  // Capture phase so the dropdown always closes before any other click
-  // handler runs — prevents it lingering over content below it.
-  document.addEventListener(
-    "click",
-    (e) => {
-      if (!e.target.closest(".search-results") && !e.target.closest("#search-input")) {
-        hideResults();
-      }
-    },
-    true
-  );
+  document.addEventListener("pointerdown", (event) => {
+    if (!event.target.closest(".search-wrap")) hideResults();
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "/" && document.activeElement !== els.searchInput) {
       e.preventDefault();
@@ -1080,11 +1152,13 @@ function wireStatsDropdown() {
 function openStatsMenu() {
   els.profileStatsMenu.hidden = false;
   els.profileStatsTrigger.classList.add("open");
+  syncDropdownScrollLock();
 }
 
 function closeStatsMenu() {
   els.profileStatsMenu.hidden = true;
   els.profileStatsTrigger.classList.remove("open");
+  syncDropdownScrollLock();
 }
 
 /** Group all props by player so the dropdown/chips show one row per player. */
@@ -1097,13 +1171,22 @@ function groupByPlayer(props) {
   return [...map.entries()];
 }
 
+function normalizePlayerSearch(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function matchPlayers(query) {
-  const q = query.trim().toLowerCase();
+  const q = normalizePlayerSearch(query);
   const groups = groupByPlayer(state.props);
   if (!q) return groups.slice(0, 8);
   return groups
     .filter(([player, props]) =>
-      [player, props[0].team, props[0].sport].filter(Boolean).some((f) => f.toLowerCase().includes(q))
+      [player, props[0].team, props[0].sport].filter(Boolean).some((f) => normalizePlayerSearch(f).includes(q))
     )
     .slice(0, 8);
 }
@@ -1122,10 +1205,23 @@ function staticEntriesFor(query) {
 
 let searchDebounceTimer = null;
 let searchRequestToken = 0;
+let researchLoaderCleanup = null;
+const playerSearchCache = new Map();
+
+function clearSearchQuery() {
+  els.searchInput.value = "";
+}
 
 function onSearchInput() {
   const query = els.searchInput.value;
   const isSearchable = query.trim().length >= 2;
+
+  if (!query.trim()) {
+    clearTimeout(searchDebounceTimer);
+    searchRequestToken++;
+    hideResults();
+    return;
+  }
 
   // Static demo matches render instantly; live MLB suggestions follow after
   // a short debounce so we're not firing an API call on every keystroke.
@@ -1143,10 +1239,16 @@ async function fetchLiveSuggestions(query) {
   const token = ++searchRequestToken;
   let livePlayers = [];
   let fetchFailed = false;
+  const cacheKey = normalizePlayerSearch(query);
   try {
-    const res = await fetch(`${API_PLAYERS_SOURCE}?q=${encodeURIComponent(query)}`);
-    const data = await res.json();
-    livePlayers = data.players || [];
+    if (playerSearchCache.has(cacheKey)) {
+      livePlayers = playerSearchCache.get(cacheKey);
+    } else {
+      const res = await fetch(`${API_PLAYERS_SOURCE}?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      livePlayers = data.players || [];
+      if (res.ok) playerSearchCache.set(cacheKey, livePlayers);
+    }
   } catch (err) {
     fetchFailed = true;
   }
@@ -1154,13 +1256,15 @@ async function fetchLiveSuggestions(query) {
   if (token !== searchRequestToken) return; // a newer keystroke superseded this fetch
 
   const staticEntries = staticEntriesFor(query);
-  const staticNames = new Set(staticEntries.map((e) => e.player.toLowerCase()));
+  const staticNames = new Set(staticEntries.map((e) => normalizePlayerSearch(e.player)));
   const liveEntries = livePlayers
-    .filter((p) => p.name && !staticNames.has(p.name.toLowerCase()))
+    .filter((p) => p.name && !staticNames.has(normalizePlayerSearch(p.name)))
     .map((p) => ({
       kind: "live",
       player: p.name,
       team: p.team,
+      playerId: p.id,
+      teamId: p.team_id,
       sport: "MLB",
       sub: p.position || "MLB",
       headshot: `https://img.mlbstatic.com/mlb-photos/image/upload/w_180,q_auto:best/v1/people/${p.id}/headshot/67/current`,
@@ -1170,12 +1274,12 @@ async function fetchLiveSuggestions(query) {
 }
 
 function onSearchKeydown(e) {
-  const items = els.searchResults.querySelectorAll(".search-result-item");
+  const items = els.searchResults?.querySelectorAll(".search-result-item") || [];
   if (!items.length) {
     if (e.key === "Enter" && els.searchInput.value.trim().length > 1) {
       e.preventDefault();
       const query = els.searchInput.value.trim();
-      els.searchInput.value = "";
+      clearSearchQuery();
       hideResults();
       selectPlayer(query);
     }
@@ -1193,7 +1297,7 @@ function onSearchKeydown(e) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     const idx = state.activeIndex >= 0 ? state.activeIndex : 0;
-    items[idx]?.dispatchEvent(new Event("mousedown"));
+    items[idx]?.click();
   } else if (e.key === "Escape") {
     hideResults();
     els.searchInput.blur();
@@ -1207,12 +1311,8 @@ function highlightActive(items) {
 function renderResults(entries, { loading = false, fetchFailed = false } = {}) {
   state.activeIndex = -1;
   els.searchResults.innerHTML = "";
-
   const query = els.searchInput.value.trim();
   const haveNames = new Set(entries.map((e) => e.player.toLowerCase()));
-  // Manual "search live" fallback only when nothing else is offered --
-  // covers the rare case where the MLB name-search API itself comes up
-  // empty for a short/ambiguous query, or the autocomplete fetch failed.
   const showLiveOption = query.length > 1 && !haveNames.has(query.toLowerCase()) && !loading && (entries.length === 0 || fetchFailed);
 
   if (entries.length === 0 && !loading && !showLiveOption) {
@@ -1220,53 +1320,49 @@ function renderResults(entries, { loading = false, fetchFailed = false } = {}) {
     return;
   }
 
-  entries.forEach((entry, i) => {
-    const li = document.createElement("li");
-    li.className = "search-result-item";
-    li.style.animationDelay = `${i * 30}ms`;
-    li.innerHTML = `
+  entries.forEach((entry, index) => {
+    const item = document.createElement("li");
+    item.className = "search-result-item";
+    item.style.animationDelay = `${index * 30}ms`;
+    item.innerHTML = `
       ${avatarHtml(entry, "sm")}
-      <span class="sr-main">
-        <span class="sr-player">${escapeHtml(entry.player)}${entry.team ? " (" + escapeHtml(entry.team) + ")" : ""}</span>
-        <span class="sr-pick">${escapeHtml(entry.sub || "")}</span>
-      </span>
-      <span class="sr-sport">${escapeHtml(entry.sport || "")}</span>
+      <span class="sr-main"><span class="sr-player">${escapeHtml(entry.player)}</span></span>
+      ${teamLogoHtml(entry.teamId, entry.team, "sr-team-logo")}
     `;
-    li.addEventListener("mousedown", () => {
-      els.searchInput.value = "";
+    const choosePlayer = (event) => {
+      event.preventDefault();
+      clearTimeout(searchDebounceTimer);
+      searchRequestToken++;
+      clearSearchQuery();
       hideResults();
-      // Live-search entries carry the real position in `sub` (e.g. "P",
-      // "SS"); static demo entries put a prop-count string there instead,
-      // so only trust it as a position hint for live results.
-      selectPlayer(entry.player, entry.kind === "live" ? entry.sub : null);
-    });
-    els.searchResults.appendChild(li);
+      els.searchInput.blur();
+      selectPlayer(entry.player, entry.kind === "live" ? entry.sub : null, { playerEntry: entry });
+    };
+    item.addEventListener("click", choosePlayer);
+    els.searchResults.appendChild(item);
   });
 
   if (loading) {
-    const li = document.createElement("li");
-    li.className = "search-result-item search-result-loading";
-    li.innerHTML = `<span class="loading-pulse"></span><span class="sr-main"><span class="sr-pick">Searching MLB players…</span></span>`;
-    els.searchResults.appendChild(li);
+    const item = document.createElement("li");
+    item.className = "search-result-item search-result-loading";
+    item.innerHTML = `<span class="loading-pulse"></span><span class="sr-main"><span class="sr-pick">Searching MLB players…</span></span>`;
+    els.searchResults.appendChild(item);
   }
 
   if (showLiveOption) {
-    const li = document.createElement("li");
-    li.className = "search-result-item search-result-live";
-    li.style.animationDelay = `${entries.length * 30}ms`;
-    li.innerHTML = `
-      <span class="sr-live-icon">⚡</span>
-      <span class="sr-main">
-        <span class="sr-player">Search "${escapeHtml(query)}" live</span>
-        <span class="sr-pick">${fetchFailed ? "Player search failed — try an exact name" : "No matches yet — try the exact name"}</span>
-      </span>
-    `;
-    li.addEventListener("mousedown", () => {
-      els.searchInput.value = "";
+    const item = document.createElement("li");
+    item.className = "search-result-item search-result-live";
+    item.innerHTML = `<span class="sr-main"><span class="sr-player">Search "${escapeHtml(query)}" live</span><span class="sr-pick">${fetchFailed ? "Player search failed — try an exact name" : "No matches yet — try the exact name"}</span></span>`;
+    item.addEventListener("click", (event) => {
+      event.preventDefault();
+      clearTimeout(searchDebounceTimer);
+      searchRequestToken++;
+      clearSearchQuery();
       hideResults();
+      els.searchInput.blur();
       selectPlayer(query);
     });
-    els.searchResults.appendChild(li);
+    els.searchResults.appendChild(item);
   }
 
   els.searchResults.hidden = false;
@@ -1276,9 +1372,25 @@ function hideResults() {
   els.searchResults.hidden = true;
 }
 
+// Quick-start suggestions for the "Or jump straight to:" row. These are just
+// names, not data -- every lookup still goes through the live API, same as
+// typing a name and picking "search live". Static predictions.json now
+// ships with zero entries on purpose: any pre-baked demo data risked being
+// shown instead of a real live result whenever a stat/line happened to
+// match, which was actively misleading (e.g. a fabricated "Rockies"
+// matchup appearing for a real Padres game).
+
 /* ---------- Player profile: stat buttons + slide/type-in line picker ---------- */
 
-const cmd = { player: null, stat: null, line: null, side: null };
+const cmd = { player: null, playerId: null, teamId: null, teamName: "", stat: null, line: null, side: null };
+const prizePicksLineCache = new Map();
+let currentResearchProp = null;
+let prizePicksDefaultPending = false;
+
+function syncDropdownScrollLock() {
+  const menuOpen = !els.profileStatsMenu.hidden || !els.ppLinesMenu.hidden;
+  document.body.classList.toggle("dropdown-scroll-locked", menuOpen);
+}
 
 function wireLinePicker() {
   els.sideToggle.querySelectorAll(".side-btn").forEach((btn) => {
@@ -1291,29 +1403,113 @@ function wireLinePicker() {
   });
 
   els.lineSlider.addEventListener("input", () => {
+    prizePicksDefaultPending = false;
     setLineValue(Number(els.lineSlider.value));
   });
   els.lineSlider.addEventListener("change", () => {
     setLineValue(Number(els.lineSlider.value), { immediate: true });
   });
   els.lineNumber.addEventListener("change", () => {
+    prizePicksDefaultPending = false;
     setLineValue(Number(els.lineNumber.value), { immediate: true });
   });
-  els.lineStepDown.addEventListener("click", () => setLineValue(cmd.line - 0.5, { immediate: true }));
-  els.lineStepUp.addEventListener("click", () => setLineValue(cmd.line + 0.5, { immediate: true }));
+  els.lineStepDown.addEventListener("click", () => { prizePicksDefaultPending = false; setLineValue(cmd.line - 0.5, { immediate: true }); });
+  els.lineStepUp.addEventListener("click", () => { prizePicksDefaultPending = false; setLineValue(cmd.line + 0.5, { immediate: true }); });
+  const togglePrizePicksMenu = () => {
+    const opening = els.ppLinesMenu.hidden;
+    els.ppLinesMenu.hidden = !opening;
+    els.ppLinesTrigger.setAttribute("aria-expanded", String(opening));
+    syncDropdownScrollLock();
+    if (opening) loadPrizePicksLines();
+  };
+  els.ppLinesTrigger.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    els.ppLinesTrigger.focus();
+    togglePrizePicksMenu();
+  });
+  els.ppLinesTrigger.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    togglePrizePicksMenu();
+  });
+  document.addEventListener("click", (event) => {
+    if (!els.ppLinesMenu.hidden && !els.ppLinesWrap.contains(event.target)) {
+      els.ppLinesMenu.hidden = true;
+      els.ppLinesTrigger.setAttribute("aria-expanded", "false");
+      syncDropdownScrollLock();
+    }
+  });
+}
+
+function americanOdds(value) {
+  const odds = Number(value);
+  return Number.isFinite(odds) ? `${odds > 0 ? "+" : ""}${odds}` : "—";
+}
+
+async function loadPrizePicksLines() {
+  const opponent = currentResearchProp?.matchup?.opponent || "";
+  const key = `${cmd.player}|${cmd.stat}|${opponent}`.toLowerCase();
+  els.ppLinesMenu.innerHTML = `<div class="pp-lines-state">Loading live PrizePicks lines…</div>`;
+  try {
+    let data = prizePicksLineCache.get(key);
+    if (!data) {
+      const url = `${API_SOURCE}?action=prizepicks-lines&player=${encodeURIComponent(cmd.player)}&stat=${encodeURIComponent(cmd.stat)}&opponent=${encodeURIComponent(opponent)}`;
+      const response = await fetch(url, { cache: "no-store" });
+      data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "PrizePicks lines unavailable");
+      prizePicksLineCache.set(key, data);
+    }
+    const featured = (data.lines || []).find(row => row.featured)?.line;
+    const availableLines = (data.lines || []).filter(row => cmd.side === "Under" ? row.ppUnder : row.ppOver);
+    if (!availableLines.length) throw new Error(`PrizePicks has not posted ${cmd.side} lines for this player yet.`);
+    const currentRow = availableLines.find(row => Math.abs(Number(row.line) - Number(cmd.line)) < .01);
+    if (`${cmd.player}|${cmd.stat}|${opponent}`.toLowerCase() === key) {
+      const currentTier = currentRow?.tier || (currentRow?.featured ? "STANDARD" : "ALT");
+      els.ppLinesTrigger.querySelector("b").innerHTML = currentRow
+        ? `<span>${cmd.line}</span><small>${currentTier}</small>`
+        : "PrizePicks lines";
+    }
+    els.ppLinesMenu.innerHTML = `<div class="pp-lines-head"><div><span>PrizePicks</span><b>${escapeHtml(cmd.stat)}</b></div></div>` + availableLines.map(row => {
+      const selected = Math.abs(Number(row.line) - Number(cmd.line)) < .01;
+      const safer = featured != null && (cmd.side === "Over" ? row.line < featured : row.line > featured);
+      const boosted = featured != null && (cmd.side === "Over" ? row.line > featured : row.line < featured);
+      const tier = row.tier || (row.featured ? "STANDARD" : safer ? "GOBLIN" : boosted ? "DEMON" : "ALT");
+      return `<button type="button" class="pp-line-option ${selected ? "selected" : ""}" data-pp-line="${row.line}"><b>${row.line}</b><span class="pp-line-icons">${tier}</span>${selected ? "<i>✓</i>" : ""}</button>`;
+    }).join("");
+    els.ppLinesMenu.querySelectorAll("[data-pp-line]").forEach(button => button.addEventListener("click", () => {
+      prizePicksDefaultPending = false;
+      els.ppLinesMenu.hidden = true;
+      els.ppLinesTrigger.setAttribute("aria-expanded", "false");
+      syncDropdownScrollLock();
+      setLineValue(Number(button.dataset.ppLine), { immediate: true });
+    }));
+    const stillCurrent = `${cmd.player}|${cmd.stat}|${currentResearchProp?.matchup?.opponent || ""}`.toLowerCase() === key;
+    if (stillCurrent && prizePicksDefaultPending && featured != null
+        && Math.abs(Number(featured) - Number(cmd.line)) >= .01) {
+      prizePicksDefaultPending = false;
+      setLineValue(Number(featured), { immediate: true });
+    }
+  } catch (error) {
+    els.ppLinesTrigger.querySelector("b").textContent = "Lines unavailable";
+    els.ppLinesMenu.innerHTML = `<div class="pp-lines-state error">${escapeHtml(error.message)}</div>`;
+  }
 }
 
 // "P" -> pitcher-only stats, anything else known -> batter-only stats,
 // undefined/null (position not known, e.g. typed-and-Entered names that
 // skipped autocomplete) -> both, so a valid option is never hidden just
 // because we couldn't confirm the position.
-function selectPlayer(player, position, { autoSelectStat = true, viaDeepDive = false } = {}) {
+function selectPlayer(player, position, { autoSelectStat = true, viaDeepDive = false, playerEntry = null } = {}) {
   if (!viaDeepDive) {
     state.v2DeepDiveReturn = null;
     els.v2BackBtn.hidden = true;
   }
   hideResults();
   cmd.player = player;
+  cmd.playerId = playerEntry?.playerId || null;
+  cmd.teamId = playerEntry?.teamId || null;
+  cmd.teamName = playerEntry?.team || "";
   cmd.stat = null;
   cmd.line = null;
   cmd.side = null;
@@ -1321,8 +1517,11 @@ function selectPlayer(player, position, { autoSelectStat = true, viaDeepDive = f
   const staticProps = propsForPlayer();
   const first = staticProps[0];
 
-  els.profileAvatar.innerHTML = first ? avatarHtml(first, "lg") : avatarHtml(player, "lg");
-  els.profileName.textContent = first && first.team ? `${player} (${first.team})` : player;
+  const profileSource = first || playerEntry || player;
+  const profileTeamId = first?.teamId || first?.team_id || playerEntry?.teamId || null;
+  const profileTeam = first?.team || playerEntry?.team || "";
+  els.profileAvatar.innerHTML = avatarHtml(profileSource, "lg");
+  els.profileName.innerHTML = `<span>${escapeHtml(player)}</span>${teamLogoHtml(profileTeamId, profileTeam, "profile-team-logo")}`;
   els.profileSub.textContent = first
     ? `${first.sport} · pick a stat to dial in a line`
     : "MLB · pick a stat to look up a live line";
@@ -1376,18 +1575,24 @@ function selectPlayer(player, position, { autoSelectStat = true, viaDeepDive = f
 
 function selectStat(stat) {
   cmd.stat = stat;
+  prizePicksDefaultPending = true;
+  currentResearchProp = null;
+  els.ppLinesWrap.hidden = true;
+  els.ppLinesMenu.hidden = true;
+  syncDropdownScrollLock();
   if (els.profileStats.value !== stat) els.profileStats.value = stat;
   els.profileStatsTriggerLabel.textContent = stat;
   els.profileStatsMenu.querySelectorAll(".profile-stats-menu-item").forEach((li) => {
     li.classList.toggle("active", li.textContent === stat);
   });
 
-  const matches = propsForPlayer().filter((p) => p.betType === stat);
-  const hasStaticData = matches.length > 0;
+  const statMatches = propsForPlayer().filter((p) => p.betType === stat);
+  const matches = statMatches.filter((p) => p.side === "Over");
+  const hasStaticData = statMatches.length > 0;
   const fallbackLine = STAT_DEFAULT_LINE[stat] ?? 0.5;
-  const lines = hasStaticData ? matches.map((p) => p.line) : [fallbackLine];
-  const defaultProp = matches[0];
-  const availableSides = new Set(matches.map((p) => p.side));
+  const lines = hasStaticData ? statMatches.map((p) => p.line) : [fallbackLine];
+  const defaultProp = matches[0] || statMatches[0];
+  const availableSides = new Set(statMatches.map((p) => p.side));
 
   // Only lock out a side when we KNOW (from static data) it has no coverage.
   // For live lookups both sides are always computable, so leave them enabled.
@@ -1408,7 +1613,7 @@ function selectStat(stat) {
   els.lineNumber.min = String(min);
   els.lineNumber.max = String(max);
 
-  cmd.side = defaultProp ? defaultProp.side : "Over";
+  cmd.side = !hasStaticData || availableSides.has("Over") ? "Over" : defaultProp.side;
   els.sideToggle.querySelectorAll(".side-btn").forEach((b) => b.classList.toggle("active", b.dataset.side === cmd.side));
 
   els.linePicker.hidden = false;
@@ -1460,19 +1665,21 @@ function setLineValue(value, { immediate = false } = {}) {
 let lineSelectionToken = 0;
 
 function withAuthoritativeBoardMatchup(prop, player, stat, line, side) {
+  // The board remains authoritative for the official VORTEX pick score/tier.
+  // Matchup is deliberately NOT copied from the board: Research and the
+  // Matchup tab both use the current live matchup calculation.
   const boardContext = state.boardResearchContext;
   const sameBoardProp = boardContext
     && boardContext.player.toLowerCase() === String(player).toLowerCase()
     && boardContext.stat === stat
     && Math.abs(Number(boardContext.line) - Number(line)) < 0.01
     && boardContext.side === String(side).toLowerCase();
-  if (!sameBoardProp || !Number.isFinite(Number(boardContext.matchupScore))) return prop;
+  if (!sameBoardProp) return prop;
   return {
     ...prop,
-    matchupScore: Number(boardContext.matchupScore),
-    matchupLabel: boardContext.matchupLabel,
-    matchupCoverage: boardContext.matchupCoverage,
-    matchupFactors: boardContext.matchupFactors,
+    ...(Number.isFinite(Number(boardContext.vortexScore))
+      ? { score: Number(boardContext.vortexScore), tier: boardContext.tier || prop.tier }
+      : {}),
   };
 }
 
@@ -1498,9 +1705,28 @@ async function fetchLivePrediction(player, stat, line, side, token) {
 
   let result = null;
   let errorMessage = null;
+  const controller = new AbortController();
+  const requestTimeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const url = `${API_SOURCE}?player=${encodeURIComponent(player)}&stat=${encodeURIComponent(stat)}&line=${line}&side=${side.toLowerCase()}`;
-    const res = await fetch(url);
+    // Build this URL the same way as the player-search request. Older iOS
+    // WebKit can throw "The string did not match the expected pattern" while
+    // constructing URLSearchParams from a record, before fetch ever reaches
+    // the API. Explicit encoding is supported by every Safari version that
+    // can run the rest of this app and keeps spaces/accents safe.
+    const query = [
+      ["player", player],
+      ["stat", stat],
+      ["line", String(line)],
+      ["side", side.toLowerCase()],
+      ...(cmd.playerId ? [["playerId", String(cmd.playerId)]] : []),
+      ...(cmd.teamId ? [["teamId", String(cmd.teamId)]] : []),
+      ...(cmd.teamName ? [["team", cmd.teamName]] : []),
+    ].map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
+    const res = await fetch(`${API_SOURCE}?${query}`, {
+      signal: controller.signal,
+      cache: "no-store",
+      credentials: "same-origin",
+    });
     const data = await res.json();
     if (!res.ok || data.error) {
       errorMessage = data.error || `Request failed (${res.status})`;
@@ -1508,7 +1734,11 @@ async function fetchLivePrediction(player, stat, line, side, token) {
       result = data;
     }
   } catch (err) {
-    errorMessage = err.message;
+    errorMessage = err.name === "AbortError"
+      ? "Research took longer than 15 seconds. Please retry."
+      : "Live research is temporarily unavailable. Please tap the stat to retry.";
+  } finally {
+    clearTimeout(requestTimeout);
   }
 
   if (token !== lineSelectionToken) return; // a newer selection superseded this one
@@ -1523,32 +1753,26 @@ async function fetchLivePrediction(player, stat, line, side, token) {
 
 function renderLoadingState(player, stat, line, side) {
   els.reportWrap.querySelector(".report")?.remove();
-  els.reportWrap.querySelector(".report-skeleton")?.remove();
+  removeResearchLoader();
   els.emptyState.hidden = true;
 
   const skeleton = document.createElement("div");
   skeleton.className = "report-skeleton";
-  skeleton.innerHTML = `
-    <div class="kp-analysis-loader" role="status" aria-live="polite">
-      <div class="kp-loader-head">
-        <span class="kp-loader-mark"><i></i></span>
-        <div class="kp-loader-copy">
-          <span>LIVE PROP RESEARCH</span>
-          <strong>${escapeHtml(player)}</strong>
-          <small>${escapeHtml(side)} ${line} · ${escapeHtml(stat)}</small>
-        </div>
-        <b class="kp-loader-status">BUILDING READ</b>
-      </div>
-      <div class="kp-loader-progress"><i></i></div>
-      <div class="kp-loader-signals" aria-hidden="true">
-        <span><i>01</i><b>RECENT FORM</b><em></em></span>
-        <span><i>02</i><b>GAME MATCHUP</b><em></em></span>
-        <span><i>03</i><b>LINE + RISK</b><em></em></span>
-      </div>
-      <p>Checking the data behind this prop<span class="kp-loader-dots"><i></i><i></i><i></i></span></p>
-    </div>
-  `;
+  const host = document.createElement("div");
+  host.className = "research-ai-loader-host";
+  skeleton.appendChild(host);
   els.reportWrap.appendChild(skeleton);
+  if (typeof window.vortexMountResearchLoader === "function") {
+    researchLoaderCleanup = window.vortexMountResearchLoader(host, { player, stat, line, side });
+  } else {
+    host.innerHTML = `<div class="research-ai-loader" role="status"><strong>Preparing ${escapeHtml(player)} prop research…</strong></div>`;
+  }
+}
+
+function removeResearchLoader() {
+  researchLoaderCleanup?.();
+  researchLoaderCleanup = null;
+  els.reportWrap.querySelector(".report-skeleton")?.remove();
 }
 
 function showNoDataMessage(stat, line, side, liveError) {
@@ -1590,19 +1814,34 @@ function propsForPlayer() {
  * header (which only had whatever casing the user typed, e.g. "freddie freeman"). */
 function syncProfileHeaderWithProp(p) {
   if (!els.playerProfile.hidden && p.player) {
-    els.profileName.textContent = p.team ? `${p.player} (${p.team})` : p.player;
+    const nameNode = els.profileName.querySelector("span");
+    if (nameNode) nameNode.textContent = p.player;
+    else els.profileName.innerHTML = `<span>${escapeHtml(p.player)}</span>`;
     els.profileAvatar.innerHTML = avatarHtml(p, "lg");
     cmd.player = p.player;
   }
 }
 
-const EMPTY_STATE_DEFAULT_TEXT = "Search for a player above to pull up their prop breakdown.";
+const EMPTY_STATE_DEFAULT_HTML = `
+  <div class="research-welcome-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="5.75" stroke="currentColor" stroke-width="1.5"/><path d="m15 15 4.25 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+  </div>
+  <p class="research-welcome-kicker">Player research</p>
+  <h2>Start with a player.</h2>
+  <p class="research-welcome-copy">Search above to turn a live prop into one clear, matchup-aware view.</p>
+  <div class="research-welcome-features" aria-label="Research includes">
+    <div><span>01</span><strong>Recent form</strong><small>L5, L10 and L20 trends</small></div>
+    <div><span>02</span><strong>Matchup context</strong><small>Splits, opponent and venue</small></div>
+    <div><span>03</span><strong>Live lines</strong><small>PrizePicks-ready research</small></div>
+  </div>`;
 
 function clearReport() {
   els.reportWrap.querySelector(".report")?.remove();
-  els.reportWrap.querySelector(".report-skeleton")?.remove();
+  removeResearchLoader();
   els.emptyState.hidden = false;
-  els.emptyState.textContent = EMPTY_STATE_DEFAULT_TEXT;
+  els.emptyState.classList.add("research-welcome");
+  els.emptyState.setAttribute("aria-label", "Player research welcome");
+  els.emptyState.innerHTML = EMPTY_STATE_DEFAULT_HTML;
 }
 
 /* ---------- Report rendering (Research tab) ---------- */
@@ -1611,8 +1850,14 @@ function renderReport(p) {
   hideResults();
   els.emptyState.hidden = true;
   els.reportWrap.querySelector(".report")?.remove();
-  els.reportWrap.querySelector(".report-skeleton")?.remove();
+  removeResearchLoader();
   syncProfileHeaderWithProp(p);
+  currentResearchProp = p;
+  els.ppLinesWrap.hidden = !(p?.matchup?.opponent && cmd.player && cmd.stat);
+  if (!els.ppLinesWrap.hidden) {
+    els.ppLinesTrigger.querySelector("b").textContent = "Checking PrizePicks…";
+    loadPrizePicksLines();
+  }
 
   const node = buildReportNode(p);
   els.reportWrap.appendChild(node);
@@ -1647,13 +1892,43 @@ function renderReport(p) {
 /* ---------- Expandable game log modal (L5/L10/L15/L20/H2H) ---------- */
 
 let gameLogState = {
-  chart: null, line: null, player: "", opponent: "", window: "l10",
+  chart: null, line: null, player: "", opponent: "", window: "recent",
   handFilter: "all", venueFilter: "all", handDataLoaded: false, teamId: null,
-  stat: "", isPitcher: false, fetchToken: 0,
+  stat: "", isPitcher: false, fetchToken: 0, gameCount: 5, season: "all",
+  filtersOpen: false, animationDirection: "none",
 };
 
 function snapPropLine(value) {
   return Math.max(0.5, Math.round(Number(value) - 0.5) + 0.5);
+}
+
+const GAMELOG_STAT_CODES = {
+  "Hits+Runs+RBIs": "HRR", "Total Bases": "TB", "Hits": "H",
+  "Home Runs": "HR", "RBIs": "RBI", "Runs Scored": "R",
+  "Strikeouts": "SO", "Walks": "BB", "Fantasy Score": "FS",
+  "Strikeouts (Pitcher)": "K", "Pitching Outs": "OUTS",
+  "Earned Runs Allowed": "ER", "Hits Allowed": "HA", "Walks Allowed": "BB",
+  "Fantasy Score (Pitcher)": "PFS",
+};
+const MLB_TEAM_IDS = { ARI:109, AZ:109, ATL:144, BAL:110, BOS:111, CHC:112, CWS:145, CIN:113, CLE:114, COL:115, DET:116, HOU:117, KC:118, LAA:108, LAD:119, MIA:146, MIL:158, MIN:142, NYM:121, NYY:147, OAK:133, PHI:143, PIT:134, SD:135, SEA:136, SF:137, STL:138, TB:139, TEX:140, TOR:141, WSH:120 };
+let gameLogPageScrollY = 0;
+
+function lockGameLogPageScroll() {
+  if (document.body.classList.contains("gamelog-scroll-locked")) return;
+  gameLogPageScrollY = window.scrollY;
+  document.body.style.setProperty("--gamelog-lock-top", `${-gameLogPageScrollY}px`);
+  document.body.classList.add("gamelog-scroll-locked");
+}
+
+function unlockGameLogPageScroll() {
+  if (!document.body.classList.contains("gamelog-scroll-locked")) return;
+  document.body.classList.remove("gamelog-scroll-locked");
+  document.body.style.removeProperty("--gamelog-lock-top");
+  window.scrollTo(0, gameLogPageScrollY);
+}
+
+function gameLogStatCode(stat) {
+  return GAMELOG_STAT_CODES[stat] || stat;
 }
 
 function regradeGameLog(line) {
@@ -1666,6 +1941,7 @@ function setGameLogPreviewLine(value, settle = false) {
   const raw = Math.max(0.5, Number(value) || 0.5);
   const line = settle ? snapPropLine(raw) : raw;
   gameLogState.line = line;
+  if (els.gamelogLineValue) els.gamelogLineValue.textContent = Number(line).toFixed(1);
   if (settle) {
     regradeGameLog(line);
     renderGameLogTabs();
@@ -1674,32 +1950,52 @@ function setGameLogPreviewLine(value, settle = false) {
 }
 
 function populateGameLogStats() {
-  const stats = gameLogState.isPitcher ? PITCHER_STATS : BATTER_STATS;
-  els.gamelogStat.innerHTML = stats.map((stat) => `<option value="${escapeHtml(stat)}">${escapeHtml(stat)}</option>`).join("");
-  els.gamelogStat.value = gameLogState.stat;
+  const stats = gameLogState.availableStats || (gameLogState.isPitcher ? PITCHER_STATS : BATTER_STATS);
+  els.gamelogStatTabs.innerHTML = stats.map((stat) => `<button type="button" data-stat="${escapeHtml(stat)}" class="${stat === gameLogState.stat ? "active" : ""}">${escapeHtml(gameLogStatCode(stat))}</button>`).join("");
 }
 
 async function loadGameLogStat(stat) {
   const token = ++gameLogState.fetchToken;
   gameLogState.stat = stat;
-  els.gamelogStat.disabled = true;
+  els.gamelogStatTabs?.querySelectorAll("button").forEach((button) => { button.disabled = true; });
   els.gamelogChart.classList.add("is-loading");
-  els.gamelogTitle.textContent = `${gameLogState.player} — ${stat}`;
+  els.gamelogTitle.textContent = gameLogState.player || "Player";
+  els.gamelogStatTabs?.querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.stat === stat));
   try {
-    const url = `/api/game-log-filters?player=${encodeURIComponent(gameLogState.player)}&stat=${encodeURIComponent(stat)}&line=${gameLogState.line}` +
-      (gameLogState.teamId ? `&teamId=${gameLogState.teamId}` : "");
+    // Each market has its own PrizePicks baseline. Resolve that line before
+    // fetching the new log so switching to K/OUTS/etc. never inherits the
+    // previous market's number.
+    const ppStat = stat.replace(/ \(Pitcher\)$/, "");
+    let resolvedPrizePicksLine = false;
+    try {
+      const pp = await fetch(`/api/prediction?action=prizepicks-lines&player=${encodeURIComponent(gameLogState.player)}&stat=${encodeURIComponent(ppStat)}&opponent=${encodeURIComponent(gameLogState.opponent || "")}`);
+      const ppData = await pp.json();
+      const posted = (ppData.lines || []).find((row) => row.featured) || (ppData.lines || [])[0];
+      if (posted && Number.isFinite(Number(posted.line))) {
+        gameLogState.line = Number(posted.line);
+        els.gamelogLineValue.textContent = gameLogState.line.toFixed(1);
+        resolvedPrizePicksLine = true;
+      }
+    } catch (_) { /* fall back to the current line when live lines are unavailable */ }
+    if (!resolvedPrizePicksLine && Number.isFinite(Number(STAT_DEFAULT_LINE[stat]))) {
+      gameLogState.line = STAT_DEFAULT_LINE[stat];
+      els.gamelogLineValue.textContent = gameLogState.line.toFixed(1);
+    }
+    const url = `/api/game-log-filters?player=${encodeURIComponent(gameLogState.player)}&stat=${encodeURIComponent(stat)}&line=${gameLogState.line}&season=all` +
+      (gameLogState.teamId ? `&teamId=${gameLogState.teamId}` : "") +
+      (gameLogState.opponent ? `&opponent=${encodeURIComponent(gameLogState.opponent)}` : "");
     const res = await fetch(url);
     const data = await res.json();
     if (token !== gameLogState.fetchToken) return;
     if (!res.ok || data.error) throw new Error(data.error || "Unable to load this stat");
     gameLogState.chart = data;
     regradeGameLog(gameLogState.line);
-    gameLogState.window = [gameLogState.window, "l10", "l5", "l15", "l20", "h2h"].find((w) => (data[w] || []).length) || "l10";
+    gameLogState.window = "recent";
   } catch (err) {
     els.gamelogSub.textContent = err.message || "This stat is unavailable right now.";
   } finally {
     if (token === gameLogState.fetchToken) {
-      els.gamelogStat.disabled = false;
+      els.gamelogStatTabs?.querySelectorAll("button").forEach((button) => { button.disabled = false; });
       els.gamelogChart.classList.remove("is-loading");
       renderGameLogTabs();
       renderGameLogChart();
@@ -1709,45 +2005,69 @@ async function loadGameLogStat(stat) {
 
 function openGameLogModal(p) {
   gameLogState.chart = p.gameLogChart || {};
+  if (!gameLogState.chart.all) {
+    gameLogState.chart.all = [...(gameLogState.chart.l20 || gameLogState.chart.l15 || gameLogState.chart.l10 || gameLogState.chart.l5 || [])];
+  }
   gameLogState.line = p.line;
   gameLogState.player = p.player;
   gameLogState.stat = p.betType;
-  gameLogState.isPitcher = PITCHER_STATS.includes(p.betType);
+  gameLogState.isPitcher = PITCHER_STATS.includes(p.betType) || p.position === "P" || p.isPitcherProp === true;
+  const twoWay = p.isTwoWay === true || p.position === "TWP" || /shohei\s+ohtani/i.test(p.player || "");
+  gameLogState.availableStats = twoWay ? STANDARD_STATS : (gameLogState.isPitcher ? PITCHER_STATS : BATTER_STATS);
   gameLogState.opponent = (p.matchup && p.matchup.opponent) || "";
   gameLogState.handFilter = "all";
   gameLogState.venueFilter = "all";
   gameLogState.handDataLoaded = false;
+  gameLogState.gameCount = Math.min(5, gameLogState.chart.all.length || 5);
+  gameLogState.window = "recent";
+  // Start with the complete recent sample. Selecting the newest season here
+  // could temporarily collapse the chart to one game while the detail request
+  // was still loading, which made the modal visibly jump after opening.
+  gameLogState.season = "all";
+  gameLogState.filtersOpen = false;
+  gameLogState.animationDirection = "initial";
   // Deliberately NOT teamInsightsParams.teamId -- that's the player's own
   // team (for the Team Insights lineup view), while H2H filtering here needs
   // the actual opponent's team id.
   gameLogState.teamId = p.opponentTeamId || null;
-  // Default to the widest window that actually has data, so a prop with
-  // only 5 games logged doesn't open on an empty L10 tab.
-  gameLogState.window = ["l10", "l5", "l15", "l20"].find((w) => (gameLogState.chart[w] || []).length > 0) || "l10";
-
   els.gamelogOverlay.hidden = false;
-  els.gamelogTitle.textContent = `${p.player} — ${p.betType}`;
+  lockGameLogPageScroll();
+  els.gamelogTitle.textContent = p.player || "Player";
+  if (els.gamelogPropBadge) els.gamelogPropBadge.textContent = gameLogStatCode(p.betType);
+  const teamName = p.teamAbbr || p.teamName || (typeof p.team === "string" ? p.team : p.team?.abbreviation) || "";
+  const teamId = p.teamId || p.team_id || p.ownTeamId || p.team?.id || MLB_TEAM_IDS[String(teamName).toUpperCase()];
+  if (els.gamelogTeamMark) {
+    els.gamelogTeamMark.hidden = !teamName && !teamId;
+    els.gamelogTeamMark.innerHTML = teamId
+      ? `<img src="https://www.mlbstatic.com/team-logos/${encodeURIComponent(teamId)}.svg" alt="" onerror="this.style.display='none'"><span>${escapeHtml(teamName)}</span>`
+      : `<span>${escapeHtml(teamName)}</span>`;
+  }
+  const cutout = String(p.headshot || "").replace("/headshot/67/current", "/headshot/silo/current");
+  els.gamelogPlayerCutout.innerHTML = cutout
+    ? `<img src="${escapeHtml(cutout)}" alt="" onerror="this.parentElement.innerHTML=''">`
+    : avatarHtml(p, "lg");
+  els.gamelogLineValue.textContent = Number(p.line).toFixed(1);
   populateGameLogStats();
+  setGameLogFiltersOpen(false);
   renderGameLogTabs();
   renderGameLogChart();
 
-  // Handedness filter needs a lazy fetch (resolving each game's opposing
-  // starter's hand costs real network time); venue (home/road) is already
-  // in the data for free. Pitcher props don't get a hand filter at all --
-  // one start faces a whole lineup of both hands, so "the game's
-  // handedness" isn't a coherent concept the way it is for a batter.
+  // Career H2H is loaded lazily for every prop when the explorer opens.
+  // Batter props also resolve opposing-starter handedness; pitcher props do
+  // not, because one start faces a mixed lineup rather than one pitcher hand.
   const isPitcherProp = gameLogState.isPitcher;
   els.glHandFilter.hidden = isPitcherProp;
   renderGameLogSubfilters();
-  if (!isPitcherProp) fetchGameLogHandedness(p);
+  fetchGameLogDetails(p);
 }
 
-async function fetchGameLogHandedness(p) {
+async function fetchGameLogDetails(p) {
   const requestedStat = p.betType;
   els.glHandFilter.querySelectorAll(".gl-filter-chip").forEach((b) => { b.disabled = true; });
   try {
-    const url = `/api/game-log-filters?player=${encodeURIComponent(p.player)}&stat=${encodeURIComponent(p.betType)}&line=${p.line}` +
-      (gameLogState.teamId ? `&teamId=${gameLogState.teamId}` : "");
+    const url = `/api/game-log-filters?player=${encodeURIComponent(p.player)}&stat=${encodeURIComponent(p.betType)}&line=${p.line}&season=all` +
+      (gameLogState.teamId ? `&teamId=${gameLogState.teamId}` : "") +
+      (gameLogState.opponent ? `&opponent=${encodeURIComponent(gameLogState.opponent)}` : "");
     const res = await fetch(url);
     const data = await res.json();
     if (res.ok && !data.error && gameLogState.stat === requestedStat) {
@@ -1758,10 +2078,11 @@ async function fetchGameLogHandedness(p) {
       // chart in that case silently threw away good H2H data the moment
       // this lazy fetch resolved. Only replace windows this fetch actually
       // returned games for; leave everything else as it was.
-      for (const key of Object.keys(data)) {
-        if (data[key] && data[key].length) gameLogState.chart[key] = data[key];
-      }
+      for (const key of Object.keys(data)) if (Array.isArray(data[key])) gameLogState.chart[key] = data[key];
       gameLogState.handDataLoaded = true;
+      // A background detail refresh must never look like a user-triggered
+      // chart transition.
+      gameLogState.animationDirection = "none";
     }
   } catch (err) {
     console.error("game-log-filters fetch failed:", err);
@@ -1774,10 +2095,12 @@ async function fetchGameLogHandedness(p) {
 
 function closeGameLogModal() {
   els.gamelogOverlay.hidden = true;
+  unlockGameLogPageScroll();
 }
 
 function filterGames(games) {
   return games.filter((g) => {
+    if (gameLogState.season !== "all" && String(g.season || String(g.fullDate || "").slice(0, 4)) !== gameLogState.season) return false;
     if (gameLogState.handFilter !== "all" && g.oppHand !== gameLogState.handFilter) return false;
     if (gameLogState.venueFilter === "home" && g.isHome !== true) return false;
     if (gameLogState.venueFilter === "road" && g.isHome !== false) return false;
@@ -1793,84 +2116,119 @@ function renderGameLogSubfilters() {
   els.glVenueFilter.querySelectorAll(".gl-filter-chip").forEach((b) => {
     b.classList.toggle("active", b.dataset.venue === gameLogState.venueFilter);
   });
+  const activeCount = Number(gameLogState.handFilter !== "all") + Number(gameLogState.venueFilter !== "all") + Number(gameLogState.season !== "all");
+  if (els.gamelogFilterCount) {
+    els.gamelogFilterCount.hidden = activeCount === 0;
+    els.gamelogFilterCount.textContent = activeCount;
+  }
 }
 
 function renderGameLogTabs() {
-  els.gamelogTabs.querySelectorAll(".gamelog-tile").forEach((btn) => {
-    const w = btn.dataset.window;
-    const rawGames = gameLogState.chart[w] || [];
-    const games = filterGames(rawGames);
-    const hasData = rawGames.length > 0;
-    btn.disabled = !hasData;
-    btn.classList.toggle("active", w === gameLogState.window);
-
-    const labelEl = btn.querySelector(".gl-tile-label");
-    const rateEl = btn.querySelector(".gl-tile-rate");
-    const avgEl = btn.querySelector(".gl-tile-avg");
-    if (w === "h2h") {
-      labelEl.textContent = gameLogState.opponent ? `CAREER H2H · ${gameLogState.opponent}` : "CAREER H2H";
-    }
-    if (!hasData || !games.length) {
-      rateEl.textContent = hasData ? "0 g" : "—";
-      avgEl.textContent = "";
-      rateEl.classList.remove("gl-tile-rate-good", "gl-tile-rate-bad");
-      return;
-    }
-    const overCount = games.filter((g) => g.over).length;
-    const rate = Math.round((overCount / games.length) * 100);
-    const avg = games.reduce((sum, g) => sum + g.value, 0) / games.length;
-    rateEl.textContent = `${rate}%`;
-    rateEl.classList.toggle("gl-tile-rate-good", rate >= 55);
-    rateEl.classList.toggle("gl-tile-rate-bad", rate <= 45);
-    avgEl.textContent = `Avg ${avg.toFixed(2)}`;
+  const max = gameLogPool().length;
+  if (gameLogState.window !== "h2h") gameLogState.gameCount = Math.max(1, Math.min(gameLogState.gameCount, Math.max(1, max)));
+  if (els.gamelogGamesCount) els.gamelogGamesCount.textContent = gameLogState.gameCount;
+  if (els.gamelogWindowLabel) els.gamelogWindowLabel.textContent = gameLogState.window === "h2h" ? "Career matchups" : `Last ${gameLogState.gameCount} game${gameLogState.gameCount === 1 ? "" : "s"}`;
+  if (els.gamelogGamesDown) els.gamelogGamesDown.disabled = gameLogState.window === "h2h" || gameLogState.gameCount <= 1;
+  if (els.gamelogGamesUp) els.gamelogGamesUp.disabled = gameLogState.window === "h2h" || gameLogState.gameCount >= max;
+  if (els.gamelogH2HToggle) {
+    els.gamelogH2HToggle.hidden = !(gameLogState.chart?.h2h || []).length;
+    els.gamelogH2HToggle.classList.toggle("active", gameLogState.window === "h2h");
+  }
+  const seasons = [...new Set(recentGameLogSource().map((game) => String(game.season || String(game.fullDate || "").slice(0, 4))).filter((season) => /^\d{4}$/.test(season)))].sort().concat("all");
+  if (els.gamelogSeasonRow) {
+    els.gamelogSeasonRow.innerHTML = seasons.map((season) => `<button type="button" data-season="${season}" class="${gameLogState.season === season ? "active" : ""}">${season === "all" ? "All" : season}</button>`).join("");
+  }
+  els.gamelogPresetRow?.querySelectorAll("button").forEach((btn) => {
+    const value = btn.dataset.games === "max" ? max : Number(btn.dataset.games);
+    btn.disabled = !max;
+    btn.classList.toggle("active", gameLogState.window !== "h2h" && gameLogState.gameCount === value);
   });
+  renderGameLogSubfilters();
 }
 
 function renderGameLogChart() {
-  const games = filterGames(gameLogState.chart[gameLogState.window] || []);
+  const pool = gameLogPool();
+  const games = gameLogState.window === "h2h" ? pool : pool.slice(-gameLogState.gameCount);
   const holder = els.gamelogChart;
+  holder.dataset.window = gameLogState.window;
+  holder.dataset.change = gameLogState.animationDirection;
   holder.innerHTML = "";
+  holder.scrollLeft = 0;
 
   const filterBits = [];
   if (gameLogState.handFilter !== "all") filterBits.push(`vs ${gameLogState.handFilter}HP`);
   if (gameLogState.venueFilter !== "all") filterBits.push(gameLogState.venueFilter === "home" ? "at home" : "on the road");
+  if (gameLogState.season !== "all") filterBits.push(gameLogState.season);
   const filterSuffix = filterBits.length ? ` (${filterBits.join(", ")})` : "";
 
   if (!games.length) {
-    const rawLen = (gameLogState.chart[gameLogState.window] || []).length;
+    const rawLen = pool.length;
     els.gamelogSub.textContent = rawLen
       ? `No games in this window${filterSuffix}.`
       : "No games available for this window.";
+    document.getElementById("gamelog-summary-rate").textContent = "—";
+    document.getElementById("gamelog-summary-rate-percent").textContent = "—";
+    document.getElementById("gamelog-summary-record").textContent = "—";
+    document.getElementById("gamelog-summary-average").textContent = "—";
     return;
   }
 
-  const label = gameLogState.window === "h2h"
-    ? `All meetings vs ${gameLogState.opponent || "this opponent"} across available seasons${filterSuffix}`
-    : `Last ${games.length} games${filterSuffix}`;
   const overCount = games.filter((g) => g.over).length;
-  els.gamelogSub.textContent = `${label} — ${overCount}/${games.length} over the ${gameLogState.line} line (${Math.round((overCount / games.length) * 100)}%).`;
+  const hitRate = Math.round((overCount / games.length) * 100);
+  const average = games.reduce((sum, game) => sum + Number(game.value || 0), 0) / games.length;
+  // The chart already communicates the active window and line through its
+  // controls; don't duplicate it as a stray right-aligned caption.
+  els.gamelogSub.textContent = "";
+  document.getElementById("gamelog-summary-rate").textContent = `${overCount}/${games.length}`;
+  document.getElementById("gamelog-summary-rate-percent").textContent = `${hitRate}% hit rate`;
+  document.getElementById("gamelog-summary-record").textContent = `${overCount}–${games.length - overCount}`;
+  document.getElementById("gamelog-summary-average").textContent = average.toFixed(2);
 
-  // Line value can exceed every game's value (e.g. a 5.5 K line with a
-  // season-high of 5) -- widen the scale so the dashed marker never sits
-  // above the chart's visible area.
+  // Keep the vertical scale anchored to the market, never to the current
+  // sample. This stops the prop line from jumping when a bar is added/removed.
   const line = gameLogState.line;
-  const trackPx = 130;
-  const max = Math.max(...games.map((g) => g.value), typeof line === "number" ? line : 0, 1);
+  // Match the responsive CSS track height exactly; using a shorter mobile
+  // math scale made low lines such as 0.5 float far above the baseline.
+  const trackPx = window.innerWidth <= 430 ? 210 : window.innerWidth <= 900 ? 238 : 280;
+  const scaleCaps = { "Hits": 6, "Home Runs": 4, "Total Bases": 12, "Hits+Runs+RBIs": 10, "Runs Scored": 6, "RBIs": 6, "Walks": 5, "Strikeouts": 12, "Pitching Outs": 27, "Hits Allowed": 10, "Earned Runs Allowed": 8, "Strikeouts (Pitcher)": 12, "Walks Allowed": 5 };
+  const max = Math.max(scaleCaps[gameLogState.stat] || 10, typeof line === "number" ? Math.ceil(line * 1.6) : 1);
   const track = document.createElement("div");
   track.className = "gamelog-chart-track";
+  track.style.setProperty("--game-count", String(games.length));
+  track.style.setProperty("--bar-width", games.length > 20 ? "30px" : games.length > 10 ? "38px" : "52px");
+  track.dataset.count = String(games.length);
+  track.dataset.dense = games.length > 20 ? "true" : "false";
+  track.dataset.logo = games.length <= 12 ? "true" : "false";
   games.forEach((g) => {
     const col = document.createElement("div");
     col.className = "gl-col";
     const heightPx = Math.max(4, (g.value / max) * trackPx);
+    const details = g.pitcherDetails || null;
+    const opponentId = g.opponentTeamId || MLB_TEAM_IDS[String(g.opponent || "").toUpperCase()];
+    const tooltipRows = details ? [
+      ["Innings pitched", details.inningsPitched], ["Batters faced", details.battersFaced],
+      ["Pitch count", details.pitchCount], ["Walks", details.walks], ["Strikeouts", details.strikeouts],
+    ].filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value]) => `<div><span>${label}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("") : "";
+    const fullDate = g.fullDate || g.date || "";
+    const aria = `${fullDate}, ${g.opponent || "opponent"}, ${gameLogStatCode(gameLogState.stat)} ${g.value}`;
     col.innerHTML = `
       <div class="gl-track" style="height:${trackPx}px">
-        <div class="gl-bar${g.over ? "" : " gl-bar-under"}" style="height:${heightPx}px">
-          <span class="gl-val">${g.value}</span>
+        <div class="gl-bar-shell" tabindex="0" role="button" aria-label="${escapeHtml(aria)}">
+          <div class="gl-bar${g.over ? "" : " gl-bar-under"}" style="height:${heightPx}px">
+            <span class="gl-val">${g.value}</span>
+          </div>
+          ${details ? `<div class="gl-detail-card" role="tooltip"><header><strong>${escapeHtml(fullDate)}</strong><span>${escapeHtml(g.opponent || "")}</span></header><div class="gl-detail-result">${g.over ? "Cleared" : "Under"} by ${Math.abs(Number(g.value) - Number(gameLogState.line)).toFixed(1)}</div>${tooltipRows}</div>` : ""}
         </div>
       </div>
-      <span class="gl-opp">${escapeHtml(g.opponent || "")}</span>
-      <span class="gl-date">${escapeHtml(gameLogState.window === "h2h" ? (g.fullDate || g.date || "") : (g.date || ""))}</span>
+      ${games.length <= 20 ? `<span class="gl-opponent-logo">${opponentId ? `<img src="https://www.mlbstatic.com/team-logos/${encodeURIComponent(opponentId)}.svg" alt="" loading="lazy" onerror="this.parentElement.textContent='${escapeHtml(String(g.opponent || "").slice(0, 3))}'">` : escapeHtml(String(g.opponent || "").slice(0, 3))}</span>` : ""}
     `;
+    const shell = col.querySelector(".gl-bar-shell");
+    shell?.addEventListener("click", () => {
+      if (!window.matchMedia("(hover: none), (pointer: coarse)").matches || !details) return;
+      const willOpen = !shell.classList.contains("detail-open");
+      holder.querySelectorAll(".gl-bar-shell.detail-open").forEach((item) => item.classList.remove("detail-open"));
+      shell.classList.toggle("detail-open", willOpen);
+    });
     track.appendChild(col);
   });
 
@@ -1878,7 +2236,8 @@ function renderGameLogChart() {
     const topPx = Math.max(0, trackPx - (line / max) * trackPx);
     const marker = document.createElement("div");
     marker.className = "gl-line-marker";
-    marker.style.top = `${topPx}px`;
+    marker.style.top = "var(--chart-top, 34px)";
+    marker.style.setProperty("--line-offset", `${topPx}px`);
     marker.innerHTML = `<span class="gl-line-tag">${Number(line).toFixed(1)}</span>`;
     marker.setAttribute("role", "slider");
     marker.setAttribute("aria-label", "Drag prop line");
@@ -1894,7 +2253,7 @@ function renderGameLogChart() {
           setGameLogPreviewLine(raw, true);
         } else {
           const displayLine = snapPropLine(raw);
-          marker.style.top = `${Math.max(0, trackPx - (raw / max) * trackPx)}px`;
+          marker.style.setProperty("--line-offset", `${Math.max(0, trackPx - (raw / max) * trackPx)}px`);
           marker.querySelector(".gl-line-tag").textContent = displayLine.toFixed(1);
         }
       };
@@ -1906,12 +2265,17 @@ function renderGameLogChart() {
       };
       marker.onpointercancel = marker.onpointerup;
     });
-    track.appendChild(marker);
+    holder.appendChild(marker);
   }
   holder.appendChild(track);
-  // Bars are oldest-to-newest, so open each window at the newest games.
-  // Users can scroll left when they want to inspect older history.
-  requestAnimationFrame(() => { holder.scrollLeft = holder.scrollWidth; });
+  const axis = document.createElement("div");
+  axis.className = "gl-y-axis";
+  axis.setAttribute("aria-hidden", "true");
+  axis.innerHTML = `<span>${Number(max).toFixed(max % 1 ? 1 : 0)}</span><span>${Number(max / 2).toFixed(max % 1 ? 1 : 0)}</span><span>0</span>`;
+  holder.appendChild(axis);
+  // Never move the viewport as a side effect of rendering. Only direct user
+  // input should animate or change the chart position.
+  gameLogState.animationDirection = "none";
 }
 
 function wireGameLogModal() {
@@ -1922,13 +2286,66 @@ function wireGameLogModal() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !els.gamelogOverlay.hidden) closeGameLogModal();
   });
-  els.gamelogTabs.querySelectorAll(".gamelog-tile").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (btn.disabled) return;
-      gameLogState.window = btn.dataset.window;
-      renderGameLogTabs();
-      renderGameLogChart();
+  const wireStableAction = (button, action) => {
+    if (!button) return;
+    const activate = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      button.dataset.pointerActivated = "true";
+      button.blur();
+      action();
+    };
+    button.addEventListener("pointerdown", activate, { passive: false });
+    button.addEventListener("click", (event) => {
+      if (button.dataset.pointerActivated === "true") {
+        delete button.dataset.pointerActivated;
+        return;
+      }
+      activate(event);
     });
+  };
+  wireStableAction(els.gamelogFilterToggle, () => setGameLogFiltersOpen(!gameLogState.filtersOpen));
+  els.gamelogFilterClose?.addEventListener("click", () => setGameLogFiltersOpen(false));
+  const wireCountButton = (button, delta, direction) => {
+    if (!button) return;
+    const activate = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      button.dataset.pointerActivated = "true";
+      button.blur();
+      setGameLogCount(gameLogState.gameCount + delta, direction);
+    };
+    button.addEventListener("pointerdown", activate, { passive: false });
+    // Keep Enter/Space keyboard activation accessible, while ignoring the
+    // synthetic click browsers emit after a touch pointerdown.
+    button.addEventListener("click", (event) => {
+      if (button.dataset.pointerActivated === "true") {
+        delete button.dataset.pointerActivated;
+        return;
+      }
+      activate(event);
+    });
+  };
+  wireCountButton(els.gamelogGamesDown, -1, "remove");
+  wireCountButton(els.gamelogGamesUp, 1, "add");
+  wireStableAction(els.gamelogH2HToggle, () => {
+    gameLogState.window = gameLogState.window === "h2h" ? "recent" : "h2h";
+    gameLogState.animationDirection = "initial";
+    renderGameLogTabs(); renderGameLogChart();
+  });
+  els.gamelogSeasonRow?.addEventListener("click", (event) => {
+    const btn = event.target.closest("button[data-season]");
+    if (!btn) return;
+    gameLogState.season = btn.dataset.season;
+    gameLogState.window = "recent";
+    gameLogState.animationDirection = "initial";
+    renderGameLogTabs(); renderGameLogChart();
+  });
+  els.gamelogPresetRow?.addEventListener("click", (event) => {
+    const btn = event.target.closest("button[data-games]");
+    if (!btn || btn.disabled) return;
+    const next = btn.dataset.games === "max" ? gameLogPool().length : Number(btn.dataset.games);
+    setGameLogCount(next, next >= gameLogState.gameCount ? "add" : "remove");
   });
   els.glHandFilter.querySelectorAll(".gl-filter-chip").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1947,7 +2364,12 @@ function wireGameLogModal() {
       renderGameLogChart();
     });
   });
-  els.gamelogStat.addEventListener("change", () => loadGameLogStat(els.gamelogStat.value));
+  els.gamelogStatTabs?.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-stat]");
+    if (button && !button.disabled) loadGameLogStat(button.dataset.stat);
+  });
+  els.gamelogLineDown.addEventListener("click", () => setGameLogPreviewLine(gameLogState.line - 0.5, true));
+  els.gamelogLineUp.addEventListener("click", () => setGameLogPreviewLine(gameLogState.line + 0.5, true));
 }
 
 /* ---------- Team insights modal (Batting Order & Pitch Arsenal) ---------- */
@@ -2354,7 +2776,7 @@ function openExactProp(p) {
   cmd.player = p.player;
   cmd.stat = p.betType;
   cmd.line = p.line;
-  cmd.side = p.side;
+  cmd.side = "Over";
 
   if (![...els.profileStats.options].some((o) => o.value === p.betType)) {
     const opt = document.createElement("option");
@@ -2383,7 +2805,7 @@ function openExactProp(p) {
 
   els.sideToggle.querySelectorAll(".side-btn").forEach((b) => {
     b.disabled = false;
-    b.classList.toggle("active", b.dataset.side === p.side);
+    b.classList.toggle("active", b.dataset.side === "Over");
   });
 
   els.linePicker.hidden = false;
@@ -2410,6 +2832,7 @@ function buildReportNode(p) {
   fillWhyItHits(node, p);
   fillBiggestEdgesRisks(node, p);
   fillPitchArsenal(node, p);
+  fillPitcherLineupProfile(node, p);
   fillSplitFactor(node, p);
   fillMatchup(node, p);
   fillNarrative(node, p);
@@ -2672,33 +3095,122 @@ function fillPitchArsenal(node, p) {
     return;
   }
   block.hidden = false;
-  block.querySelector(".arsenal-sub").textContent = [p.pitchArsenalLabel, p.pitchArsenalSource].filter(Boolean).join(" · ");
-
-  const holder = block.querySelector(".arsenal-rows");
-  holder.innerHTML = "";
-  const maxPct = Math.max(...pitches.map((x) => x.pct), 1);
-  pitches.forEach((pitch) => {
-    const row = document.createElement("div");
-    row.className = "arsenal-row";
-    row.innerHTML = `
-      <span class="arsenal-name">${escapeHtml(pitch.name)}</span>
-      <div class="arsenal-track"><div class="arsenal-fill" style="width:${(pitch.pct / maxPct) * 100}%"></div></div>
-      <span class="arsenal-pct">${pitch.pct}%</span>
-      <span class="arsenal-speed">${pitch.speed != null ? pitch.speed + " mph" : ""}</span>
-    `;
-    holder.appendChild(row);
-
-    const vs = pitch.batterVs;
-    if (vs) {
-      const detail = document.createElement("div");
-      detail.className = "arsenal-vs";
-      detail.innerHTML = `
-        <span class="vs-tier vs-tier-avg">${escapeHtml(String(vs.season || "Season"))}</span>
-        <span class="vs-stats">${formatBattingAverage(vs.avg)} AVG · ${formatBattingAverage(vs.slg)} SLG · ${escapeHtml(String(vs.whiffPct))}% whiff <span class="vs-pa">(${vs.pa} PA · all MLB pitchers)</span></span>
-      `;
-      holder.appendChild(detail);
+  const holder = block.querySelector(".arsenal-card-grid");
+  const starter = p.starterProfile || {};
+  const bvp = p.bvpCard || {};
+  const splitFallback = bvp.splitFallback || {};
+  const colors = ["#42c7ff", "#ffb31a", "#7667ff", "#ff2d82", "#16d49a", "#ff6542"];
+  const val = (value, fallback = "—") => value === null || value === undefined || value === "" ? fallback : escapeHtml(String(value));
+  const rate = (value) => Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : "—";
+  const avg = (value) => value === null || value === undefined || value === "" ? "—" : formatBattingAverage(value);
+  const teamPitchRows = p.pitcherTeamPitchTypes || [];
+  const canonicalPitch = (code) => ({ KC: "CU", FA: "FF" }[String(code || "").toUpperCase()] || String(code || "").toUpperCase());
+  const isPitcherCard = p.isPitcherProp === true;
+  const blockTitle = block.querySelector(".block-title");
+  if (blockTitle) blockTitle.textContent = isPitcherCard ? "⚾ Lineup vs Pitch Arsenal" : "⚾ Starter, BvP & Pitch Arsenal";
+  const pitcherId = starter.id || "";
+  const pitcherPhoto = pitcherId
+    ? `https://img.mlbstatic.com/mlb-photos/image/upload/w_160,q_auto:best/v1/people/${pitcherId}/headshot/silo/current`
+    : "";
+  const pitchPills = pitches.slice(0, 5).map((pitch, index) => `
+    <span class="starter-pitch-pill"><i style="--pitch-color:${colors[index % colors.length]}"></i>${escapeHtml(pitch.name)} <b>${Number(pitch.pct).toFixed(0)}%</b></span>
+  `).join("");
+  const hasBvp = Number(bvp.ab) > 0;
+  const bvpTitle = hasBvp
+    ? `CAREER VS ${escapeHtml(String(starter.name || "STARTER").split(" ").slice(-1)[0].toUpperCase())}`
+    : `SEASON VS ${escapeHtml(splitFallback.hand || starter.hand || "?")}HP`;
+  const bvpSummary = hasBvp
+    ? `${bvp.hits || 0}-for-${bvp.ab} · ${bvp.pa || bvp.ab} PA`
+    : `${val(splitFallback.pa, "0")} PA · handedness split`;
+  const lowerStats = hasBvp
+    ? [
+        ["AVG", avg(bvp.avg)], ["HR", val(bvp.hr, "0")], ["RBI", val(bvp.rbi, "0")],
+        ["BB", val(bvp.bb, "0")], ["K", val(bvp.k, "0")], ["OPS", avg(bvp.ops)],
+      ]
+    : [
+        ["AVG", avg(splitFallback.avg)], ["OPS", avg(splitFallback.ops)], ["HR", val(splitFallback.hr, "0")],
+        ["RBI", val(splitFallback.rbi, "0")], ["K%", rate(splitFallback.kPct)], ["PA", val(splitFallback.pa, "0")],
+      ];
+  const lowerGrid = lowerStats.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+  const pitchRows = pitches.map((pitch, index) => {
+    if (isPitcherCard) {
+      const team = teamPitchRows.find(row => canonicalPitch(row.pitch_type) === canonicalPitch(pitch.code));
+      if (!team || !Number(team.pa)) return "";
+      const score = Number(team.lineup_rank);
+      const scoreClass = score >= 21 ? "arsenal-rank-struggle" : score <= 10 ? "arsenal-rank-handles" : "arsenal-rank-neutral";
+      const sampleClass = team.thin_sample ? "pitch-sample-thin" : "";
+      return `<tr>
+        <td><i class="pitch-dot" style="--pitch-color:${colors[index % colors.length]}"></i>${escapeHtml(pitch.name)} <small>${Number(pitch.pct).toFixed(0)}%</small></td>
+        <td data-label="PA" class="${sampleClass}" title="${team.thin_sample ? "Limited sample — use cautiously" : ""}">${val(team.pa)}</td>
+        <td data-label="WHIFF%">${rate(team.whiff_pct)}</td>
+        <td data-label="wOBA">${avg(team.woba)}</td>
+        <td data-label="HARD-HIT%">${rate(team.hard_hit_pct)}</td>
+        <td data-label="MLB RANK" class="arsenal-rank-cell ${scoreClass}">
+          <span class="arsenal-rank-meter"><i style="width:${Number.isFinite(score) ? (score / 30) * 100 : 0}%"></i></span>
+          <b>${Number.isFinite(score) ? score : "—"}</b>
+        </td>
+      </tr><tr class="arsenal-row-extra"><td colspan="6">AVG ${avg(team.avg)} · SLG ${avg(team.slg)} · K% ${rate(team.k_pct)}</td></tr>`;
     }
-  });
+    const vs = pitch.batterVs || {};
+    const kClass = Number(vs.kPct) >= 30 ? "arsenal-hot" : "";
+    const sampleClass = Number(vs.pa) > 0 && Number(vs.pa) < 10 ? "pitch-sample-thin" : "";
+    return `<tr>
+      <td><i class="pitch-dot" style="--pitch-color:${colors[index % colors.length]}"></i>${escapeHtml(pitch.name)}</td>
+      <td data-label="FACED" class="${sampleClass}" title="${sampleClass ? "Limited sample — displayed for context only" : ""}">${val(vs.pa)}</td>
+      <td data-label="WHIFF%">${rate(vs.whiffPct)}</td><td data-label="AVG">${avg(vs.avg)}</td><td data-label="SLG">${avg(vs.slg)}</td>
+      <td data-label="wOBA">${avg(vs.woba)}</td><td data-label="K%" class="${kClass}">${rate(vs.kPct)}</td>
+    </tr>`;
+  }).join("");
+
+  if (isPitcherCard) {
+    const source = teamPitchRows[0]?.lineup_source || "available hitters";
+    const rankedRows = teamPitchRows.filter(row => Number.isFinite(Number(row.lineup_rank)));
+    const best = rankedRows.sort((a, b) => Number(b.lineup_rank) - Number(a.lineup_rank))[0];
+    const bestPitch = best && pitches.find(pitch => canonicalPitch(pitch.code) === canonicalPitch(best.pitch_type));
+    const bestRank = Number(best?.lineup_rank);
+    const pitcherFirst = String(starter.name || p.player || "The starter").split(" ")[0];
+    const teamShort = String(p.pitcherTeamPitchLabel || "Opponent lineup").replace(/ lineup vs pitch type/i, "");
+    const recommendation = best ? `
+      <div class="arsenal-recommendation ${bestRank >= 21 ? "is-attack" : bestRank <= 10 ? "is-caution" : "is-neutral"}">
+        <span class="arsenal-rec-icon">${bestRank >= 21 ? "✓" : bestRank <= 10 ? "!" : "↗"}</span>
+        <div><strong>${bestRank >= 21 ? `${escapeHtml(pitcherFirst)} should attack with ${escapeHtml(bestPitch?.name || best.pitch_name)}` : bestRank <= 10 ? `${escapeHtml(teamShort)} handles this arsenal well` : `${escapeHtml(pitcherFirst)}'s best relative option: ${escapeHtml(bestPitch?.name || best.pitch_name)}`}</strong>
+        <p>${escapeHtml(teamShort)} ranks #${bestRank}/30 against this pitch · ${avg(best.woba)} wOBA · ${rate(best.whiff_pct)} whiff${bestPitch ? ` · ${Number(bestPitch.pct).toFixed(0)}% usage` : ""}</p></div>
+      </div>` : `<div class="arsenal-recommendation is-neutral"><span class="arsenal-rec-icon">i</span><div><strong>League rank unavailable</strong><p>The official pitch results below are still shown without manufacturing a rank.</p></div></div>`;
+    holder.innerHTML = `
+      <article class="pitch-type-card pitcher-team-pitch-card">
+        <div class="pitch-type-head"><div><p class="arsenal-eyebrow">${escapeHtml(`${teamShort} vs pitch types`)}</p><small>${escapeHtml(String(source))} · Baseball Savant ${teamPitchRows[0]?.season || new Date().getFullYear()}</small></div><span>SZN</span></div>
+        <p class="pitch-rank-explainer">How this lineup handles each pitch. <b>1 handles</b> · <b>30 struggles</b>.</p>
+        ${recommendation}
+        <div class="pitch-rank-scale"><span>1 HANDLES</span><i></i><span>30 STRUGGLES</span></div>
+        <div class="pitch-type-scroll"><table><thead><tr><th>PITCH</th><th>PA</th><th>WHIFF%</th><th>wOBA</th><th>HARD-HIT%</th><th>LINEUP RANK</th></tr></thead><tbody>${pitchRows}</tbody></table></div>
+        <p class="pitch-type-note">PA and performance use the posted lineup when available, otherwise the active roster. Rank compares the team's full season against all 30 MLB teams using wOBA, whiff avoidance, K avoidance and hard-hit rate. Pitches without a reliable sample are omitted.</p>
+      </article>`;
+    return;
+  }
+
+  holder.innerHTML = `
+    <article class="starter-profile-card">
+      <p class="arsenal-eyebrow">TONIGHT'S STARTER</p>
+      <div class="starter-identity">
+        <div class="starter-photo">${pitcherPhoto ? `<img src="${pitcherPhoto}" alt="" onerror="this.style.display='none'">` : "⚾"}</div>
+        <div><h4>${val(starter.name, "Tonight's starter")} <span>${val(starter.hand)}HP</span></h4>
+        <p>${starter.gamesStarted ? `${val(starter.gamesStarted)} GS` : "Current season"}${starter.wins !== undefined && starter.losses !== undefined ? ` · ${val(starter.wins)}-${val(starter.losses)}` : ""}</p></div>
+      </div>
+      <div class="starter-pitch-pills">${pitchPills}</div>
+      <div class="starter-metrics">
+        <div><span>ERA</span><strong>${val(starter.era)}</strong></div>
+        <div><span>WHIP</span><strong>${val(starter.whip)}</strong></div>
+        <div><span>K/9</span><strong>${val(starter.kPer9)}</strong></div>
+        <div><span>BB/9</span><strong>${val(starter.bbPer9)}</strong></div>
+      </div>
+      <div class="starter-bvp-head"><b>${bvpTitle}</b><span>${bvpSummary}</span></div>
+      <div class="starter-bvp-grid">${lowerGrid}</div>
+    </article>
+    <article class="pitch-type-card">
+      <div class="pitch-type-head"><div><p class="arsenal-eyebrow">${escapeHtml(String(p.player || "BATTER").split(" ").slice(-1)[0].toUpperCase())} VS PITCH TYPE</p><small>${escapeHtml(p.pitchArsenalSource || "MLB pitch data")}</small></div><span>SZN</span></div>
+      <div class="pitch-type-scroll"><table><thead><tr><th>PITCH</th><th>FACED</th><th>WHIFF%</th><th>AVG</th><th>SLG</th><th>wOBA</th><th>K%</th></tr></thead><tbody>${pitchRows}</tbody></table></div>
+      <p class="pitch-type-note">Faced is the available plate-appearance sample. AVG, SLG, wOBA and K% are official season results against that pitch type across tracked MLB pitches. Samples below 10 are shown for context but are not used in matchup scoring.</p>
+    </article>`;
 }
 
 function fillSplitFactor(node, p) {
@@ -2909,11 +3421,21 @@ function fillModelConfirm(node, p) {
   node.querySelector(".report-timestamp").textContent = formatDate(p.date);
 }
 
-/* ---------- Static chart values ---------- */
+/* ---------- Animated fills ---------- */
 
 function countUpScoreNum(node, score) {
   const el = node.querySelector(".score-num");
-  el.textContent = Number(score) || 0;
+  const target = Number(score) || 0;
+  const start = performance.now();
+  const duration = 900;
+  function tick(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = Math.round(target * eased);
+    if (t < 1) requestAnimationFrame(tick);
+    else el.textContent = target;
+  }
+  requestAnimationFrame(tick);
 }
 
 function fillHitRateBars(node, rates) {
@@ -2925,7 +3447,9 @@ function fillHitRateBars(node, rates) {
     const fill = row.querySelector(".hr-fill");
     const pctLabel = row.querySelector(".hr-pct");
     pctLabel.textContent = `${val}%`;
-    fill.style.width = `${val}%`;
+    requestAnimationFrame(() => {
+      fill.style.width = `${val}%`;
+    });
   });
 }
 
@@ -2970,7 +3494,9 @@ function fillSparkline(node, entries, line) {
     holder.appendChild(col);
     const trackPx = 90;
     const heightPx = Math.max(24, (g.value / max) * trackPx);
-    bar.style.height = `${heightPx}px`;
+    requestAnimationFrame(() => {
+      bar.style.height = `${heightPx}px`;
+    });
   });
 
   // Dashed marker for the actual line being researched (e.g. 0.5, 1.5) —
@@ -3020,6 +3546,184 @@ function wireSavedToolbar() {
 
 function getSavedProps() {
   return [...state.savedProps.values()];
+}
+
+function fillPitcherLineupProfile(node, p) {
+  const block = node.querySelector(".pitcher-lineup-profile");
+  const profile = p.opponentOffense || {};
+  const metrics = profile.metrics || [];
+  if (!p.isPitcherProp || !metrics.length) {
+    block.hidden = true;
+    return;
+  }
+
+  const keyByMarket = {
+    "Strikeouts (Pitcher)": "k_pct",
+    "Walks Allowed": "bb_pct",
+    "Hits Allowed": "avg",
+    "Earned Runs Allowed": "runs_pg",
+    "Fantasy Score (Pitcher)": "runs_pg",
+  };
+  const relevantKey = keyByMarket[p.betType] || "";
+  const totals = profile.totals || {};
+  const handLabel = profile.pitcher_hand === "L" ? "LHP" : "RHP";
+  const number = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—";
+  block.hidden = false;
+  block.querySelector(".lineup-profile-team").textContent = `${profile.team_name || p.matchup?.opponent || "Opponent"} team baseline`;
+  block.querySelector(".lineup-profile-source").textContent = `FULL TEAM · SEASON VS ${handLabel}`;
+  block.querySelector(".lineup-profile-rows").innerHTML = metrics.map((metric) => {
+    const rank = Math.max(1, Math.min(30, Number(metric.rank) || 30));
+    const relevant = metric.key === relevantKey;
+    return `<div class="lineup-profile-row edge-${escapeHtml(metric.edge || "neutral")}${relevant ? " is-relevant" : ""}">
+      <div class="lineup-metric"><b>${escapeHtml(metric.label || "")}</b><span>#${rank}/30${relevant ? " · key" : ""}</span></div>
+      <div class="lineup-rank-track"><i style="width:${(rank / 30) * 100}%"></i></div>
+      <div class="lineup-result"><strong>${escapeHtml(metric.display || "—")}</strong><span>${escapeHtml(metric.edge_label || "NEUTRAL")}</span></div>
+    </div>`;
+  }).join("");
+  block.querySelector(".lineup-profile-note").textContent = `Official full-team plate appearances vs ${handLabel}: ${number(totals.hits)} H / ${number(totals.at_bats)} AB, ${number(totals.strikeouts)} K and ${number(totals.walks)} BB / ${number(totals.plate_appearances)} PA${totals.split_games ? ` across ${number(totals.split_games)} games` : ""}. This always uses the overall team sample; R/G and HR/G remain official team-season rates.`;
+}
+
+/* ---------- Manual PrizePicks prop builder ---------- */
+
+function setManualBetSlipOpen(open) {
+  if (open) renderManualBetSlip();
+  window.dispatchEvent(new CustomEvent("vortex:prop-builder-open", { detail: { open } }));
+  els.betSlipDrawer?.setAttribute("aria-hidden", "true");
+  els.headerBuilderTrigger?.setAttribute("aria-expanded", String(open));
+}
+
+function manualSlipLegPayload(prop) {
+  return {
+    player: prop.player,
+    stat: prop.betType,
+    line: prop.line,
+    side: String(prop.side || "over").toLowerCase() === "under" ? "under" : "over",
+  };
+}
+
+function manualBetSlipStatus(count) {
+  if (count < 2) return "Add 1 more prop to export.";
+  if (count > 6) return "Remove legs until 6 remain.";
+  return `${count}-leg slip ready to verify.`;
+}
+
+function syncManualBetSlipUi({ busy = false, status = "" } = {}) {
+  const legs = getSavedProps();
+  const count = legs.length;
+  const detail = {
+    legs: legs.map((prop) => ({
+      id: String(prop.id),
+      player: String(prop.player || "Player"),
+      side: String(prop.side || "Over"),
+      line: String(prop.line ?? "—"),
+      stat: String(prop.betType || "Prop"),
+      team: String(prop.team || prop.sport || "MLB"),
+      score: String(prop.score ?? "—"),
+      headshot: prop.headshot ? String(prop.headshot).replace("/headshot/67/current", "/headshot/silo/current") : "",
+    })),
+    status: status || els.betSlipStatus?.textContent || manualBetSlipStatus(count),
+    canExport: count >= 2 && count <= 6,
+    busy,
+  };
+  window.dispatchEvent(new CustomEvent("vortex:prop-builder-sync", { detail }));
+}
+
+function removeManualBetSlipLeg(id) {
+  const storedKey = [...state.savedProps.keys()].find((key) => String(key) === String(id));
+  if (storedKey === undefined) return;
+  const prop = state.savedProps.get(storedKey);
+  state.savedProps.delete(storedKey);
+  state.parlaySelection.delete(storedKey);
+  persistSaved();
+  updateSavedCount();
+  if (state.currentTab === "saved") renderSavedGrid();
+  const reportButton = els.reportWrap.querySelector(".save-btn");
+  if (reportButton && currentResearchProp) syncSaveButton(reportButton, currentResearchProp.id);
+  showToast(`Removed ${prop?.player || "prop"} from the builder`, "warn");
+  if (state.savedProps.size === 0) setManualBetSlipOpen(false);
+}
+
+function renderManualBetSlip() {
+  if (!els.betSlipDrawer) return;
+  const legs = getSavedProps();
+  const count = legs.length;
+  if (els.headerBuilderCount) els.headerBuilderCount.textContent = count;
+  els.betSlipHeadline.textContent = `${count} of 6 leg${count === 1 ? "" : "s"}`;
+  els.betSlipEmpty.hidden = count > 0;
+  els.betSlipLegs.hidden = count === 0;
+  els.betSlipClear.disabled = count === 0;
+  els.betSlipExport.disabled = count < 2 || count > 6;
+  els.betSlipStatus.textContent = manualBetSlipStatus(count);
+  els.betSlipLegs.innerHTML = legs.map((prop, index) => `
+    <article class="bet-slip-leg" style="--slip-delay:${index * 45}ms">
+      <span class="bet-slip-rank">${index + 1}</span>
+      <div class="bet-slip-avatar">${avatarHtml(prop, "sm")}</div>
+      <div class="bet-slip-copy"><strong>${escapeHtml(prop.player)}</strong><span>${escapeHtml(prop.side)} ${escapeHtml(String(prop.line))} ${escapeHtml(prop.betType)}</span><small>${escapeHtml(prop.team || prop.sport || "MLB")} · Score ${escapeHtml(String(prop.score ?? "—"))}</small></div>
+      <button type="button" class="bet-slip-remove" data-slip-remove="${escapeHtml(String(prop.id))}" aria-label="Remove ${escapeHtml(prop.player)}">×</button>
+    </article>`).join("");
+  els.betSlipLegs.querySelectorAll("[data-slip-remove]").forEach((button) => button.addEventListener("click", () => {
+    removeManualBetSlipLeg(button.dataset.slipRemove);
+  }));
+  syncManualBetSlipUi();
+}
+
+async function exportManualBetSlip() {
+  const legs = getSavedProps();
+  if (legs.length < 2 || legs.length > 6) return;
+  const originalLabel = els.betSlipExport.textContent;
+  els.betSlipExport.disabled = true;
+  els.betSlipExport.textContent = "Matching live lines…";
+  els.betSlipStatus.textContent = "Checking every leg on the live PrizePicks board…";
+  syncManualBetSlipUi({ busy: true, status: els.betSlipStatus.textContent });
+  try {
+    const response = await fetch(API_PRIZEPICKS_EXPORT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ legs: legs.map(manualSlipLegPayload) }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.url) {
+      const detail = payload.unmatched?.map((leg) => `${leg.player} ${leg.line} ${leg.stat}`).join("; ");
+      throw new Error(detail ? `${payload.error} ${detail}` : (payload.error || "PrizePicks export failed."));
+    }
+    els.betSlipStatus.textContent = `${payload.matches.length} live legs matched. Opening PrizePicks…`;
+    syncManualBetSlipUi({ busy: true, status: els.betSlipStatus.textContent });
+    window.location.assign(payload.url);
+  } catch (error) {
+    els.betSlipStatus.textContent = error.message || "PrizePicks export is temporarily unavailable.";
+    els.betSlipExport.disabled = false;
+    els.betSlipExport.textContent = originalLabel;
+    syncManualBetSlipUi({ busy: false, status: els.betSlipStatus.textContent });
+  }
+}
+
+function clearManualBetSlip() {
+  if (!state.savedProps.size || !confirm("Remove every prop from this builder?")) return;
+  state.savedProps.clear();
+  state.parlaySelection.clear();
+  persistSaved();
+  updateSavedCount();
+  if (state.currentTab === "saved") renderSavedGrid();
+  const reportButton = els.reportWrap.querySelector(".save-btn");
+  if (reportButton && currentResearchProp) syncSaveButton(reportButton, currentResearchProp.id);
+  setManualBetSlipOpen(false);
+}
+
+function wireManualBetSlip() {
+  els.betSlipClose?.addEventListener("click", () => setManualBetSlipOpen(false));
+  els.betSlipScrim?.addEventListener("click", () => setManualBetSlipOpen(false));
+  els.betSlipClear?.addEventListener("click", clearManualBetSlip);
+  els.betSlipExport.addEventListener("click", exportManualBetSlip);
+  window.addEventListener("vortex:toggle-bet-slip", () => {
+    window.dispatchEvent(new Event("vortex:prop-builder-toggle"));
+  });
+  window.addEventListener("vortex:prop-builder-ready", renderManualBetSlip);
+  window.addEventListener("vortex:prop-builder-request-sync", renderManualBetSlip);
+  window.addEventListener("vortex:prop-builder-remove", (event) => removeManualBetSlipLeg(event.detail?.id));
+  window.addEventListener("vortex:prop-builder-clear", clearManualBetSlip);
+  window.addEventListener("vortex:prop-builder-export", exportManualBetSlip);
+  renderManualBetSlip();
 }
 
 function renderSavedGrid() {
@@ -3092,7 +3796,6 @@ function renderSavedGrid() {
 
 /* ---------- Slate (Attack Board) ---------- */
 
-const SLATE_BULLPEN_ICON = { ELITE: "🛡️", SOLID: "✓", AVERAGE: "~", WEAK: "💥", UNKNOWN: "?" };
 let slateRequest = null;
 const researchToolCache = new Map();
 let activeResearchTool = "attack";
@@ -3169,7 +3872,7 @@ async function loadResearchTool(tool, force = false, token = toolRenderToken) {
       els.slateError.innerHTML = rows.length ? rows.map(renderToolCard).join("") : `<strong>${escapeHtml(tool)}</strong><span>No qualifying live data is available yet. No substitute list is shown.</span>`;
     }).catch((err) => {
       if (token !== toolRenderToken || activeResearchTool !== tool) return;
-      els.slateError.textContent = err.message || "Live MLB data could not be loaded for this tool.";
+      els.slateError.textContent = "Live data is temporarily unavailable.";
     });
 }
 
@@ -3192,7 +3895,7 @@ async function loadSlate(force = false, token = toolRenderToken) {
   els.slateLoading.hidden = false;
   els.slateEmpty.hidden = true;
   els.slateError.hidden = true;
-  els.slateLoading.innerHTML = `<span class="slate-live-loader"><i></i><b>BUILDING ATTACK BOARD</b><small>Resolving starters and bullpen context</small></span>`;
+  els.slateLoading.innerHTML = `<span class="slate-live-loader"><i></i><b>Preparing the board</b><small>Checking today’s starters and bullpens</small></span>`;
   els.slateList.hidden = false;
   els.slateList.innerHTML = Array.from({ length: 6 }, (_, i) => `
     <div class="slate-row slate-row-loading" style="--loader-index:${i}">
@@ -3219,7 +3922,7 @@ async function loadSlate(force = false, token = toolRenderToken) {
     if (token !== toolRenderToken || activeResearchTool !== "attack") return;
     els.slateLoading.hidden = true;
     els.slateList.innerHTML = "";
-    els.slateError.textContent = err.message || "Failed to load the slate.";
+    els.slateError.textContent = "Live data is temporarily unavailable.";
     els.slateError.hidden = false;
   }
 }
@@ -3227,8 +3930,8 @@ async function loadSlate(force = false, token = toolRenderToken) {
 function renderSlate(data) {
   const entries = data.entries || [];
     els.slateDate.textContent = entries.length
-      ? `📅 ${data.date_label || data.date || "Today"} — easiest matchups on top (vulnerable pitcher + bullpen), hardest at the bottom. Click a matchup to see how the opposing lineup hits vs that pitcher.`
-      : "Today's starting-pitcher matchups, easiest to hardest.";
+      ? `${data.date_label || data.date || "Today"} · Most favorable hitting matchups appear first. Select a matchup for the opposing lineup.`
+      : "Today’s most favorable hitting matchups appear first.";
 
   if (entries.length === 0) {
     els.slateEmpty.hidden = false;
@@ -3244,23 +3947,34 @@ function renderSlate(data) {
     // Higher score = more vulnerable pitcher/bullpen = easier matchup for
     // hitters -- green. Lower score = tougher pitcher -- red.
     const difficultyClass = e.score >= 18 ? "slate-easy" : e.score >= 11 ? "slate-medium" : "slate-hard";
-    const difficultyEmoji = e.score >= 18 ? "🟢" : e.score >= 11 ? "🟡" : "🔴";
-    const rankEmoji = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${String(i + 1).padStart(2, "0")}`;
-    const bpIcon = SLATE_BULLPEN_ICON[e.bullpen_tier] || "❓";
+    const matchupLabel = e.score >= 18 ? "Favorable" : e.score >= 11 ? "Balanced" : "Difficult";
+    const bullpenTier = String(e.bullpen_tier || "Average").toLowerCase();
+    const bullpenLabel = bullpenTier.charAt(0).toUpperCase() + bullpenTier.slice(1);
     const bpText = e.bullpen_known
-      ? `${bpIcon} ${e.bullpen_tier} (${e.bullpen_era.toFixed(2)} ERA)`
-      : `${bpIcon} unknown`;
+      ? `${bullpenLabel} · ${e.bullpen_era.toFixed(2)} ERA`
+      : "Data unavailable";
+    const teamLogo = e.team_id ? `https://www.mlbstatic.com/team-logos/${e.team_id}.svg` : "";
+    const opponentLogo = e.opponent_team_id ? `https://www.mlbstatic.com/team-logos/${e.opponent_team_id}.svg` : "";
 
     row.innerHTML = `
-      <span class="slate-rank">${rankEmoji}</span>
       <span class="slate-player-photo-wrap ${difficultyClass}">
         <img class="slate-player-photo" src="https://img.mlbstatic.com/mlb-photos/image/upload/w_180,q_auto:best/v1/people/${e.pitcher_id}/headshot/silo/current" alt="${escapeHtml(e.pitcher)}" loading="lazy" onerror="this.src='https://img.mlbstatic.com/mlb-photos/image/upload/w_180,q_auto:best/v1/people/${e.pitcher_id}/headshot/67/current';this.onerror=null;" />
-        <span class="slate-player-score">${e.score.toFixed(1)}</span>
       </span>
       <span class="slate-main">
-        <span class="slate-pitcher">👤 ${escapeHtml(e.pitcher)} <span class="slate-hand">(${escapeHtml(e.hand)})</span>${e.team ? ` · ${escapeHtml(e.team)}` : ""}</span>
-        <span class="slate-sub">⚔️ vs ${escapeHtml(e.opponent_abbr || e.opponent)} · 📊 ERA ${e.era.toFixed(2)} · HR/9 ${e.hr9.toFixed(2)} · K/9 ${e.k9.toFixed(2)} · 🛡️ ${bpText}</span>
+        <span class="slate-matchup" aria-label="${escapeHtml(e.team || "Pitching team")} versus ${escapeHtml(e.opponent || e.opponent_abbr || "opponent")}">
+          ${teamLogo ? `<img src="${teamLogo}" alt="${escapeHtml(e.team || "Pitching team")}" />` : ""}
+          <b>vs</b>
+          ${opponentLogo ? `<img src="${opponentLogo}" alt="${escapeHtml(e.opponent || e.opponent_abbr || "Opponent")}" />` : ""}
+        </span>
+        <span class="slate-pitcher">${escapeHtml(e.pitcher)} <span class="slate-hand">· ${escapeHtml(e.hand)}HP</span></span>
+        <span class="slate-stats">
+          <span><small>Starter ERA</small><b>${e.era.toFixed(2)}</b></span>
+          <span><small>HR allowed / 9</small><b>${e.hr9.toFixed(2)}</b></span>
+          <span><small>Strikeouts / 9</small><b>${e.k9.toFixed(2)}</b></span>
+          <span><small>Bullpen</small><b>${escapeHtml(bpText)}</b></span>
+        </span>
       </span>
+      <span class="slate-read ${difficultyClass}"><small>Matchup</small><b>${matchupLabel}</b></span>
     `;
     const insightParams = {
       teamId: e.opponent_team_id,
@@ -3304,11 +4018,26 @@ function wireV2Board() {
     const btn = e.target.closest("[data-board-filter]");
     if (!btn) return;
     state.boardFilter = btn.dataset.boardFilter;
+    state.matchupDisplayLimit = 40;
     els.boardFilterRow.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
     if (state.v2BoardData) renderBotBoard(state.v2BoardData);
   });
 
   els.v2BoardList.addEventListener("click", (e) => {
+    const closeBtn = e.target.closest(".v2-detail-close");
+    if (closeBtn) {
+      e.stopPropagation();
+      const detail = closeBtn.closest(".v2-detail");
+      const row = detail?.previousElementSibling;
+      if (detail) detail.hidden = true;
+      if (row?.classList.contains("v2-row")) {
+        row.classList.remove("v2-open");
+        row.setAttribute("aria-expanded", "false");
+        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        row.focus({ preventScroll: true });
+      }
+      return;
+    }
     const btn = e.target.closest(".v2-deepdive-btn");
     if (!btn) return;
     e.stopPropagation(); // don't also toggle the row's own open/close
@@ -3333,7 +4062,6 @@ function wireV2Board() {
 async function loadV2Board(force = false) {
   if (state.v2BoardLoaded && !force) return;
 
-  els.v2BoardLoading.hidden = false;
   els.v2BoardEmpty.hidden = true;
   els.v2BoardError.hidden = true;
   els.v2BoardList.innerHTML = "";
@@ -3343,10 +4071,8 @@ async function loadV2Board(force = false) {
   try {
     const res = await fetch("/api/board", { cache: "no-store" });
     const data = await res.json();
-    els.v2BoardLoading.hidden = true;
-
     if (!res.ok || data.error) {
-      els.v2BoardError.textContent = "Unable to load props. Refresh to try again.";
+      els.v2BoardError.innerHTML = `<span class="status-mark status-mark-error" aria-hidden="true"></span><span class="state-copy"><strong>Props are temporarily unavailable</strong><small>Refresh in a moment to try again.</small></span>`;
       els.v2BoardError.hidden = false;
       return;
     }
@@ -3355,8 +4081,7 @@ async function loadV2Board(force = false) {
     state.v2BoardData = data;
     renderBotBoard(data);
   } catch (err) {
-    els.v2BoardLoading.hidden = true;
-    els.v2BoardError.textContent = "Unable to load props. Refresh to try again.";
+    els.v2BoardError.innerHTML = `<span class="status-mark status-mark-error" aria-hidden="true"></span><span class="state-copy"><strong>Props are temporarily unavailable</strong><small>Refresh in a moment to try again.</small></span>`;
     els.v2BoardError.hidden = false;
   } finally {
     els.v2RefreshBtn.classList.remove("is-loading");
@@ -3417,8 +4142,19 @@ async function refreshVisibleMatchupScores(props) {
   const run = ++matchupRefreshRun;
   const refreshable = props.filter((p) => p.sport === "MLB" && BOT_STAT_TO_RESEARCH_STAT[p.stat_type]);
   if (!refreshable.length) return;
+
+  // The board payload is a scan-time snapshot. Research uses the live model,
+  // so refresh Matchups with that same endpoint instead of displaying a score
+  // that can disagree as soon as Deep Dive is opened.
+  refreshable.forEach((p) => {
+    p.stats = p.stats || {};
+    p.stats._live_matchup_ready = false;
+  });
   const queue = [...refreshable];
-  const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+  let completed = 0;
+  // These are independent serverless reads. A wider pool keeps the Matchup
+  // view responsive without making users wait for sequential player cards.
+  const workers = Array.from({ length: Math.min(12, queue.length) }, async () => {
     while (queue.length && run === matchupRefreshRun && state.boardFilter === "matchup") {
       const p = queue.shift();
       const stat = BOT_STAT_TO_RESEARCH_STAT[p.stat_type];
@@ -3428,10 +4164,23 @@ async function refreshVisibleMatchupScores(props) {
         const res = await fetch(url, { cache: "no-store" });
         const live = await res.json();
         if (!res.ok || live.error || !Number.isFinite(Number(live.matchupScore))) continue;
-        p.stats = { ...(p.stats || {}), matchup_score: Number(live.matchupScore), matchup_label: live.matchupLabel,
-          matchup_coverage: live.matchupCoverage, matchup_factors: live.matchupFactors || [] };
+        Object.assign(p.stats, {
+          matchup_score: Number(live.matchupScore),
+          matchup_label: live.matchupLabel,
+          matchup_coverage: live.matchupCoverage,
+          matchup_factors: live.matchupFactors || [],
+          _live_matchup_ready: true,
+        });
       } catch (_) {
-        // Preserve the scan-time score if live research is temporarily unavailable.
+        // Keep the scan-time score when a live lookup is temporarily unavailable.
+      } finally {
+        completed += 1;
+        // Do not hold the whole board behind the slowest request. Publish a
+        // progressively improving ranking while the remaining candidates run.
+        if (completed % 12 === 0 && run === matchupRefreshRun
+            && state.boardFilter === "matchup" && state.v2BoardData) {
+          renderBotBoard(state.v2BoardData, { scoresAreLive: true });
+        }
       }
     }
   });
@@ -3443,10 +4192,13 @@ async function refreshVisibleMatchupScores(props) {
 
 function renderBotBoard(data, { scoresAreLive = false } = {}) {
   const recommendedProps = data.props || [];
+  const matchupResearch = data.matchup_research || [];
   const researchPitchers = data.pitcher_research || [];
-  const sourceProps = state.boardFilter === "strikeouts"
-    ? [...recommendedProps, ...researchPitchers]
-    : recommendedProps;
+  const sourceProps = state.boardFilter === "matchup"
+    ? [...(matchupResearch.length ? matchupResearch : recommendedProps), ...researchPitchers]
+    : state.boardFilter === "strikeouts"
+      ? [...recommendedProps, ...researchPitchers]
+      : recommendedProps;
   // player_id is optional presentation metadata used for headshots. A scored
   // board row remains valid without it and must still mirror Discord.
   const allProps = sourceProps.map((p, sourceIndex) => ({ ...p, _boardIndex: sourceIndex }));
@@ -3456,22 +4208,57 @@ function renderBotBoard(data, { scoresAreLive = false } = {}) {
     if (filter === "matchup") return Number.isFinite(Number(p.stats?.matchup_score));
     return boardStatCategory(p.stat_type) === filter;
   });
+  // Sort each view by the score named by that view: Matchup uses the
+  // authoritative 0-100 matchup grade; every prop-market tab uses VORTEX.
+  props = props.sort((a, b) => {
+    const currentMatchup = (p) => p.stats?._live_matchup_ready === true
+      ? (Number(p.stats?.matchup_score) || 0)
+      : -1;
+    const matchupDiff = currentMatchup(b) - currentMatchup(a);
+    const vortexDiff = (Number(b.vortex_score) || 0) - (Number(a.vortex_score) || 0);
+    if (state.boardFilter === "matchup") {
+      if (matchupDiff) return matchupDiff;
+      if (vortexDiff) return vortexDiff;
+    } else {
+      if (vortexDiff) return vortexDiff;
+      if (matchupDiff) return matchupDiff;
+    }
+    const directionalL10 = (p) => {
+      const rate = Number(p.stats?.splits?.l10?.rate) || 0;
+      return String(p.stats?.side || "over").toLocaleLowerCase() === "under" ? 100 - rate : rate;
+    };
+    return directionalL10(b) - directionalL10(a);
+  });
   if (state.boardFilter === "matchup") {
-    props = props.sort((a, b) =>
-      Number(b.stats.matchup_score) - Number(a.stats.matchup_score)
-      || Number(b.vortex_score || 0) - Number(a.vortex_score || 0));
+    // Older cached feeds can contain several markets for one player. Keep
+    // the highest-ranked one in the UI as well as deduplicating at publish
+    // time, so the fix takes effect immediately after the frontend deploy.
+    const seenPlayers = new Set();
+    props = props.filter((p) => {
+      const key = String(p.player_name || "").trim().toLocaleLowerCase();
+      if (!key || seenPlayers.has(key)) return false;
+      seenPlayers.add(key);
+      return true;
+    });
+  }
+  const totalMatchups = state.boardFilter === "matchup" ? props.length : 0;
+  if (state.boardFilter === "matchup" && scoresAreLive) {
+    props = props.slice(0, state.matchupDisplayLimit);
   }
   props = props.map((p, index) => ({ ...p, _boardIndex: index }));
   state.v2RenderedProps = props;
+  const boardUpdatedAt = data.generated_at
+    ? new Date(data.generated_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : "recently";
   els.v2BoardDate.textContent = props.length
-    ? `${props.length} prop${props.length === 1 ? "" : "s"} · updated ${data.generated_at ? new Date(data.generated_at).toLocaleString() : "recently"}`
-    : "KRAZY PICKS ACTIVE BOARD — data-driven props: filtered, scored, ranked.";
+    ? `${state.boardFilter === "matchup" && scoresAreLive && totalMatchups > props.length ? `${props.length} of ${totalMatchups}` : props.length} ${state.boardFilter === "matchup" ? `matchup${totalMatchups === 1 ? "" : "s"}` : `prop${props.length === 1 ? "" : "s"}`} · updated ${boardUpdatedAt}`
+    : "Active board";
   els.v2BoardEmpty.textContent =
     "";
   els.v2BoardList.innerHTML = "";
 
   if (props.length === 0) {
-    els.v2BoardEmpty.innerHTML = `<span class="status-mark" aria-hidden="true"></span><span class="state-copy"><strong>No qualified plays yet</strong><small>The board updates when a prop clears the KRAZY PICKS thresholds.</small></span><button type="button" class="state-refresh" data-empty-refresh>Refresh</button>`;
+    els.v2BoardEmpty.innerHTML = `<span class="status-mark" aria-hidden="true"></span><span class="state-copy"><strong>No qualified plays yet</strong><small>The board updates when a prop qualifies.</small></span><button type="button" class="state-refresh" data-empty-refresh>Refresh</button>`;
     els.v2BoardEmpty.hidden = false;
     els.v2BoardEmpty.querySelector("[data-empty-refresh]")?.addEventListener("click", () => loadV2Board(true));
     return;
@@ -3479,7 +4266,7 @@ function renderBotBoard(data, { scoresAreLive = false } = {}) {
   els.v2BoardEmpty.hidden = true;
 
   if (state.boardFilter === "matchup" && !scoresAreLive) {
-    els.v2BoardDate.textContent += " · refreshing live scores…";
+    els.v2BoardDate.textContent += " · calculating current matchup scores…";
     refreshVisibleMatchupScores(props);
   }
 
@@ -3493,9 +4280,10 @@ function renderBotBoard(data, { scoresAreLive = false } = {}) {
 
     const stats = p.stats || {};
     const matchupScore = Number(stats.matchup_score);
-    const matchupBadge = Number.isFinite(matchupScore)
+    const matchupIsCurrent = state.boardFilter !== "matchup" || stats._live_matchup_ready === true;
+    const matchupBadge = matchupIsCurrent && Number.isFinite(matchupScore)
       ? `<span class="v2-card-matchup-score" data-band="${matchupScore >= 75 ? "strong" : matchupScore >= 65 ? "favorable" : matchupScore >= 55 ? "slight" : matchupScore >= 45 ? "neutral" : matchupScore >= 35 ? "caution" : "unfavorable"}">MATCHUP ${Math.round(matchupScore)} · ${boardMatchupLabel(matchupScore)}</span>`
-      : "";
+      : `<span class="v2-card-matchup-score" data-band="neutral">MATCHUP UNAVAILABLE · TRY REFRESH</span>`;
     const sidePfx = stats.side === "under" ? "U" : "O";
     const tier = BOT_TIER[p.tier] || botScoreBadge(p.vortex_score);
     const sportTag = `${SPORT_EMOJI[p.sport] || "🎯"} ${p.sport || ""}`;
@@ -3561,6 +4349,17 @@ function renderBotBoard(data, { scoresAreLive = false } = {}) {
     });
     els.v2BoardList.appendChild(row);
   });
+  if (state.boardFilter === "matchup" && scoresAreLive && props.length < totalMatchups) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "v2-matchup-more";
+    more.textContent = `Show 40 more (${totalMatchups - props.length} remaining)`;
+    more.addEventListener("click", () => {
+      state.matchupDisplayLimit += 40;
+      renderBotBoard(state.v2BoardData, { scoresAreLive: true });
+    });
+    els.v2BoardList.appendChild(more);
+  }
 }
 
 function boardStatCategory(statType) {
@@ -3711,7 +4510,7 @@ function renderBuilderResult(qualified = 0) {
   if (legs.length < state.builderLegs) {
     els.builderResult.hidden = false;
     els.builderResult.innerHTML = `<div class="builder-no-play"><span>NO QUALIFIED BUILD</span><h3>${legs.length} of ${state.builderLegs} legs cleared every gate</h3><p>${qualified} candidate${qualified === 1 ? "" : "s"} qualified individually, but correlation and duplicate-player rules prevented a valid ${state.builderLegs}-leg parlay. Lower the leg count, switch mode, or allow limited same-game legs.</p></div>`;
-    els.builderStatus.textContent = "Krazy Picks refused to force weak or conflicting legs.";
+    els.builderStatus.textContent = "No strong combination is available yet.";
     return;
   }
   const combined = builderCombinedProbability(legs);
@@ -3725,7 +4524,7 @@ function renderBuilderResult(qualified = 0) {
       <div class="builder-summary-grid"><p><span>AVG LEG QUALITY</span><b>${avgQuality.toFixed(0)}/100</b></p><p><span>DATA COVERAGE</span><b>${avgCoverage.toFixed(0)}%</b></p><p><span>CORRELATION</span><b>${risk}</b></p><p><span>BUILD</span><b>${BUILDER_MODES[state.builderMode].label}</b></p></div>
     </div>
     <div class="builder-legs">${legs.map((leg, index) => builderLegHtml(leg, index)).join("")}</div>
-    <div class="builder-footer"><p>Every leg is model-aligned and lineup/starter qualified. Recheck prices and scratches before placing.</p><button type="button" id="builder-rebuild">Rebuild unlocked legs</button></div>`;
+    <div class="builder-footer"><p>Every leg is model-aligned and lineup/starter qualified. PrizePicks will open for final review—this site never submits an entry.</p><div class="builder-footer-actions"><button type="button" id="builder-rebuild">Rebuild unlocked legs</button><button type="button" class="builder-prizepicks" id="builder-prizepicks-export">Open in PrizePicks</button></div></div>`;
   els.builderStatus.textContent = `${legs.length}-leg ${BUILDER_MODES[state.builderMode].label.toLowerCase()} build created from ${qualified} qualified props.`;
   requestAnimationFrame(() => countUpEl("builder-probability", combined.probability, { decimals: 1, suffix: "%", duration: 850 }));
   els.builderResult.querySelectorAll("[data-builder-lock]").forEach((button) => button.addEventListener("click", () => {
@@ -3745,6 +4544,41 @@ function renderBuilderResult(qualified = 0) {
     renderBuilderResult(result.qualified);
   }));
   document.getElementById("builder-rebuild")?.addEventListener("click", () => runParlayBuilder());
+  document.getElementById("builder-prizepicks-export")?.addEventListener("click", exportBuilderToPrizePicks);
+}
+
+async function exportBuilderToPrizePicks(event) {
+  const button = event.currentTarget;
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Matching live lines…";
+  els.builderStatus.textContent = "Verifying every leg against the live PrizePicks board…";
+  try {
+    const response = await fetch(API_PRIZEPICKS_EXPORT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        legs: state.builderResult.map((leg) => ({
+          player: leg.prop.player_name,
+          stat: BOT_STAT_TO_RESEARCH_STAT[leg.prop.stat_type] || leg.prop.stat_type,
+          line: leg.prop.line,
+          side: leg.prop.stats?.side === "under" ? "under" : "over",
+        })),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.url) {
+      const detail = payload.unmatched?.map((leg) => `${leg.player} ${leg.line} ${leg.stat}`).join("; ");
+      throw new Error(detail ? `${payload.error} ${detail}` : (payload.error || "PrizePicks export failed."));
+    }
+    els.builderStatus.textContent = `${payload.matches.length} live PrizePicks legs matched. Opening your lineup for review…`;
+    window.location.assign(payload.url);
+  } catch (error) {
+    els.builderStatus.textContent = error.message || "PrizePicks export is temporarily unavailable.";
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function builderLegHtml(leg, index) {
@@ -3784,6 +4618,145 @@ function wireParlayBuilder() {
   });
 }
 
+/* ---------- Slip Analyzer ---------- */
+
+let selectedSlipImage = null;
+
+function acceptSlipImage(file) {
+  const allowed = new Set(["image/png", "image/jpeg", "image/webp"]);
+  if (!file || !allowed.has(file.type)) {
+    selectedSlipImage = null;
+    els.slipGradeBtn.disabled = true;
+    els.slipFileStatus.textContent = "No image selected";
+    if (file) renderSlipError("Use a PNG, JPG, or WEBP screenshot.");
+    return;
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    selectedSlipImage = null;
+    els.slipGradeBtn.disabled = true;
+    return renderSlipError("That screenshot is larger than 4 MB. Crop or compress it, then try again.");
+  }
+  selectedSlipImage = file;
+  els.slipGradeBtn.disabled = false;
+  els.slipFileStatus.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB`;
+  els.slipAnalysisResult.innerHTML = "";
+}
+
+function renderSlipError(message) {
+  els.slipAnalysisResult.innerHTML = `<div class="slip-error" role="alert"><strong>Couldn’t analyze that slip</strong><p>${escapeHtml(message)}</p></div>`;
+}
+
+async function pasteSlipFromClipboard() {
+  if (!navigator.clipboard?.read) {
+    return renderSlipError("This browser blocks the Paste button. Copy the screenshot and press Ctrl+V or Cmd+V on this page instead.");
+  }
+  try {
+    const items = await navigator.clipboard.read();
+    const item = items.find((entry) => entry.types.some((type) => type.startsWith("image/")));
+    if (!item) return renderSlipError("No image is on the clipboard. Copy the screenshot first, then paste again.");
+    const type = item.types.find((value) => value.startsWith("image/"));
+    const blob = await item.getType(type);
+    const ext = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
+    acceptSlipImage(new File([blob], `pasted-slip-${Date.now()}.${ext}`, { type }));
+  } catch (_) {
+    renderSlipError("Clipboard access was blocked. Click anywhere on this page and press Ctrl+V or Cmd+V instead.");
+  }
+}
+
+function wireSlipAnalyzer() {
+  els.slipFileInput.addEventListener("change", () => acceptSlipImage(els.slipFileInput.files[0]));
+  ["dragenter", "dragover"].forEach((name) => els.slipUploadZone.addEventListener(name, (event) => {
+    event.preventDefault(); els.slipUploadZone.classList.add("dragging");
+  }));
+  ["dragleave", "drop"].forEach((name) => els.slipUploadZone.addEventListener(name, (event) => {
+    event.preventDefault(); els.slipUploadZone.classList.remove("dragging");
+  }));
+  els.slipUploadZone.addEventListener("drop", (event) => acceptSlipImage(event.dataTransfer.files[0]));
+  els.slipUploadZone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); els.slipFileInput.click(); }
+  });
+  els.slipPasteBtn.addEventListener("click", pasteSlipFromClipboard);
+  els.slipGradeBtn.addEventListener("click", gradeSlipImage);
+  document.addEventListener("paste", (event) => {
+    if (state.currentTab !== "slip") return;
+    const item = [...(event.clipboardData?.items || [])].find((entry) => entry.type.startsWith("image/"));
+    if (!item) return;
+    event.preventDefault();
+    const file = item.getAsFile();
+    if (file) acceptSlipImage(new File([file], `pasted-slip-${Date.now()}.png`, { type: file.type }));
+  });
+}
+
+function setGameLogFiltersOpen(open) {
+  gameLogState.filtersOpen = Boolean(open);
+  clearTimeout(gameLogState.filterCloseTimer);
+  if (gameLogState.filtersOpen) {
+    if (els.gamelogFilterPanel) {
+      els.gamelogFilterPanel.hidden = false;
+      els.gamelogFilterPanel.classList.remove("is-closing");
+    }
+    requestAnimationFrame(() => els.gamelogStudio?.classList.add("filters-open"));
+  } else {
+    els.gamelogStudio?.classList.remove("filters-open");
+    if (els.gamelogFilterPanel && !els.gamelogFilterPanel.hidden) {
+      // Hide synchronously so the one-column chart never renders underneath a
+      // still-visible drawer during its exit animation.
+      els.gamelogFilterPanel.hidden = true;
+      els.gamelogFilterPanel.classList.remove("is-closing");
+    }
+  }
+  if (els.gamelogFilterToggle) els.gamelogFilterToggle.setAttribute("aria-expanded", String(gameLogState.filtersOpen));
+}
+
+function recentGameLogSource() {
+  return gameLogState.chart?.all || gameLogState.chart?.l20 || gameLogState.chart?.l15 || gameLogState.chart?.l10 || gameLogState.chart?.l5 || [];
+}
+
+function gameLogPool() {
+  const source = gameLogState.window === "h2h" ? (gameLogState.chart?.h2h || []) : recentGameLogSource();
+  return filterGames(source);
+}
+
+function setGameLogCount(value, direction = "initial") {
+  const max = Math.max(1, gameLogPool().length);
+  gameLogState.gameCount = Math.max(1, Math.min(max, Number(value) || 1));
+  gameLogState.window = "recent";
+  gameLogState.animationDirection = direction;
+  renderGameLogTabs();
+  renderGameLogChart();
+}
+
+async function gradeSlipImage() {
+  if (!selectedSlipImage) return;
+  els.slipGradeBtn.disabled = true;
+  els.slipGradeBtn.textContent = "Analyzing…";
+  els.slipAnalysisResult.innerHTML = `<div class="slip-loader"><i></i><div><strong>Building the matchup report</strong><p>Reading 2–6 legs, resolving players, and scoring every live matchup. This can take up to a minute.</p></div></div>`;
+  try {
+    const response = await fetch(API_SLIP_ANALYZER, { method: "POST", headers: { "Content-Type": selectedSlipImage.type }, body: selectedSlipImage });
+    const data = await response.json();
+    if (data.authRequired) { await checkAuth(); return; }
+    if (!response.ok || data.error) return renderSlipError(data.error || "The slip could not be graded.");
+    renderSlipResult(data);
+  } catch (_) {
+    renderSlipError("The request did not finish. Check your connection and try the screenshot again.");
+  } finally {
+    els.slipGradeBtn.disabled = false;
+    els.slipGradeBtn.textContent = "Detect & grade parlay";
+  }
+}
+
+function renderSlipResult(data) {
+  const legs = (data.legs || []).map((leg, index) => {
+    if (leg.error) return `<article class="slip-result-leg error"><span>LEG ${index + 1}</span><p>${escapeHtml(leg.error)}</p></article>`;
+    const rates = leg.hitRates || {};
+    const matchup = leg.matchup || {};
+    const why = (leg.whyItHits || []).slice(0, 3);
+    const risks = (leg.risk || []).filter((text) => !/live lookup/i.test(text)).slice(0, 2);
+    return `<article class="slip-result-leg"><header><span>LEG ${index + 1}</span><div><h3>${escapeHtml(leg.player)}</h3><p>${escapeHtml(leg.side)} ${escapeHtml(leg.line)} ${escapeHtml(leg.detectedMarket || leg.betType)}${matchup.opponent ? ` · vs ${escapeHtml(matchup.opponent)}` : ""}</p></div><b>${escapeHtml(leg.tier || "—")}</b><strong>${escapeHtml(leg.score ?? "—")}<small>SCORE</small></strong></header><div class="slip-leg-metrics"><span>L5 <b>${escapeHtml(rates.l5 ?? "—")}%</b></span><span>L10 <b>${escapeHtml(rates.l10 ?? "—")}%</b></span><span>L20 <b>${escapeHtml(rates.l20 ?? "—")}%</b></span><span>Leg chance <b>${escapeHtml(leg.legProbability ?? "—")}%</b></span></div><details><summary>Full leg breakdown</summary>${why.length ? `<div><b>WHY IT RATES</b>${why.map((text) => `<p>${escapeHtml(cleanAnalysisText(text))}</p>`).join("")}</div>` : ""}${risks.length ? `<div class="risk"><b>RISK</b>${risks.map((text) => `<p>${escapeHtml(cleanAnalysisText(text))}</p>`).join("")}</div>` : ""}${leg.narrative ? `<div><b>MATCHUP READ</b><p>${escapeHtml(cleanAnalysisText(leg.narrative))}</p></div>` : ""}</details></article>`;
+  }).join("");
+  els.slipAnalysisResult.innerHTML = `<section class="slip-grade-summary"><div><span>PARLAY GRADE</span><h2>${escapeHtml(data.tier)}</h2><p>${data.gradedCount} legs graded · weakest leg: <b>${escapeHtml(data.weakestLeg || "—")}</b></p></div><div class="slip-parlay-score"><strong>${escapeHtml(data.parlayScore)}</strong><small>PARLAY SCORE</small></div><dl><div><dt>Combined chance</dt><dd>${escapeHtml(data.combinedProbability)}%</dd></div><div><dt>Average L10</dt><dd>${escapeHtml(data.averageL10)}%</dd></div><div><dt>Average leg score</dt><dd>${escapeHtml(data.averageLegScore)}</dd></div></dl></section><div class="slip-result-legs">${legs}</div>${data.gradedCount > 2 ? `<p class="slip-parlay-note">More legs sharply reduce the chance of the full card hitting. Compare this with a two-leg version using the strongest individual scores.</p>` : ""}`;
+}
+
 /* Expanded card — Silas-style emoji-rich format */
 function buildBotDetailHtml(p, i) {
   const stats = p.stats || {};
@@ -3820,7 +4793,7 @@ function buildBotDetailHtml(p, i) {
     : "";
 
   const l5 = splits.l5?.rate, l10 = splits.l10?.rate, l20 = splits.l20?.rate;
-  let html = `<div class="board-analysis-summary">
+  let html = `<div class="v2-detail-toolbar"><button type="button" class="v2-detail-close" aria-label="Close expanded matchup">× <span>Close</span></button></div><div class="board-analysis-summary">
     <div><span>PRICE</span><strong>${escapeHtml(fmtBotEv(p))}</strong><small>${escapeHtml(p.sportsbook || "Best available")}${typeof stats.best_odds === "number" ? ` · ${stats.best_odds > 0 ? "+" : ""}${stats.best_odds}` : ""}</small></div>
     <div><span>RECENT</span><strong>${typeof l10 === "number" ? `${l10}% L10` : "No sample"}</strong><small>${typeof l5 === "number" ? `${l5}% L5` : "L5 —"}${typeof l20 === "number" ? ` · ${l20}% L20` : ""}</small></div>
     <div><span>MATCHUP</span><strong>${Number.isFinite(Number(stats.matchup_score)) ? `${Math.round(Number(stats.matchup_score))}/100` : "Not graded"}</strong><small>${escapeHtml(boardMatchupLabel(stats.matchup_score) || "Coverage unavailable")}</small></div>
@@ -3863,7 +4836,9 @@ function deepDiveIntoBotProp(p) {
     player: p.player_name,
     stat,
     line: Number(p.line),
-    side: boardStats.side === "under" ? "under" : "over",
+    side: "over",
+    vortexScore: p.vortex_score,
+    tier: p.tier,
     matchupScore: boardStats.matchup_score,
     matchupLabel: boardStats.matchup_label,
     matchupCoverage: boardStats.matchup_coverage,
@@ -3875,9 +4850,8 @@ function deepDiveIntoBotProp(p) {
   selectPlayer(p.player_name, isPitcher ? "P" : null, { autoSelectStat: false, viaDeepDive: true });
   selectStat(stat);
 
-  const side = p.stats && p.stats.side === "under" ? "Under" : "Over";
-  cmd.side = side;
-  els.sideToggle.querySelectorAll(".side-btn").forEach((b) => b.classList.toggle("active", b.dataset.side === side));
+  cmd.side = "Over";
+  els.sideToggle.querySelectorAll(".side-btn").forEach((b) => b.classList.toggle("active", b.dataset.side === "Over"));
   setLineValue(p.line, { immediate: true });
 
   switchTab("research", document.querySelector('.tab-btn[data-tab="research"]'));
@@ -4100,7 +5074,16 @@ function renderParlayView() {
 function countUpEl(id, target, { decimals = 0, duration = 1000, suffix = "" } = {}) {
   const el = document.getElementById(id);
   if (!el) return;
-  el.textContent = `${target.toFixed(decimals)}${suffix}`;
+  const start = performance.now();
+  function tick(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const value = target * eased;
+    el.textContent = `${value.toFixed(decimals)}${suffix}`;
+    if (t < 1) requestAnimationFrame(tick);
+    else el.textContent = `${target.toFixed(decimals)}${suffix}`;
+  }
+  requestAnimationFrame(tick);
 }
 
 /* ---------- Player Detail Modal (Silas-style) ---------- */
@@ -4367,7 +5350,7 @@ function wirePlayerDetailModal() {
     const savedProp = {
       id: `board-${p.player_name}-${p.stat_type}-${p.line}`,
       player: p.player_name,
-      betType: p.stat_type,
+      betType: BOT_STAT_TO_RESEARCH_STAT[p.stat_type] || p.stat_type,
       line: p.line,
       side: p.stats?.side === "under" ? "Under" : "Over",
       team: p.stats?.team || "",

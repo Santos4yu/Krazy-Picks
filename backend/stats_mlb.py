@@ -123,6 +123,16 @@ def _cache_ttl_sec(cache_key: str) -> int:
         return 30 * 60
     if cache_key.startswith(("schedule_", "gametimes_")):
         return 5 * 60
+    if cache_key.startswith("all_teams_hit_"):
+        # Team totals update after every final. A six-hour season-aggregate
+        # cache could leave yesterday's game count/ranks on the site.
+        return 15 * 60
+    if cache_key.startswith("lineup_stats_"):
+        return 15 * 60
+    if cache_key.startswith("all_batters_v"):
+        return 15 * 60
+    if cache_key.startswith("projected_lineups_"):
+        return 15 * 60
     if cache_key.startswith("gamelog_"):
         return 15 * 60
     if cache_key.startswith("umpires_"):
@@ -142,6 +152,32 @@ def clear_cache() -> int:
             pass
     return n
 
+
+def _combined_player_split(splits: list) -> dict:
+    """Return a player's combined row instead of one team stint.
+
+    MLB returns one row per team plus a team-less aggregate row after a
+    midseason trade. Selecting ``splits[0]`` silently mixes different team
+    stints across stats. Prefer the aggregate row; ordinary one-team players
+    still use their sole row.
+    """
+    if not splits:
+        return {}
+    if len(splits) == 1:
+        return splits[0]
+    combined = [row for row in splits if not row.get("team")]
+    if combined:
+        return combined[-1]
+    # Defensive fallback for any response that omits the aggregate marker:
+    # the combined row, when present, has the largest season sample.
+    return max(
+        splits,
+        key=lambda row: int((row.get("stat") or {}).get("plateAppearances", 0)
+                            or (row.get("stat") or {}).get("atBats", 0)
+                            or (row.get("stat") or {}).get("gamesPlayed", 0)
+                            or 0),
+    )
+
 # Stat keys per prop type  →  (game_log_field, display_label)
 PROP_STAT_MAP = {
     "hits":           ("hits",       "Hits"),
@@ -154,9 +190,11 @@ PROP_STAT_MAP = {
     "hits_runs_rbis": (None,         "H+R+RBIs"),  # computed field
     "fantasy_score":  (None,         "Fantasy Score (PP)"),  # PrizePicks scoring
     # Pitcher props
+    "pitcher_strikeouts":   ("strikeOuts", "Strikeouts (Pitcher)"),
     "pitcher_outs":   ("inningsPitched", "Outs"),   # computed via IP→outs in _stat_from_game
     "pitcher_hits_allowed": ("hits",  "Hits Allowed"),
     "pitcher_earned_runs":  ("earnedRuns", "Earned Runs"),
+    "pitcher_walks":        ("baseOnBalls", "Walks Allowed"),
 }
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -445,7 +483,9 @@ def _resolve_opp_pitcher_hands(games: list[dict]) -> dict[int, str]:
 
 def get_historical_splits(player_id: int, line: float,
                            prop_type: str = "hits",
-                           include_hand_venue: bool = False) -> dict:
+                           include_hand_venue: bool = False,
+                           season: int | None = None,
+                           max_games: int = 20) -> dict:
     """
     Fetch the player's current-season game log and compute L5/L10/L20 hit rates.
 
@@ -467,15 +507,19 @@ def get_historical_splits(player_id: int, line: float,
     from datetime import date as _date
     _today = _date.today().isoformat()
 
-    _PITCHER_PROPS = {"pitcher_outs", "pitcher_hits_allowed", "pitcher_earned_runs"}
+    _PITCHER_PROPS = {
+        "pitcher_strikeouts", "pitcher_outs", "pitcher_hits_allowed",
+        "pitcher_earned_runs", "pitcher_walks",
+    }
     is_pitcher = prop_type in _PITCHER_PROPS
     group = "pitching" if is_pitcher else "hitting"
     prefix = "pitch" if is_pitcher else "hit"
 
+    effective_season = int(season or SEASON)
     data = _get(f"/people/{player_id}/stats", {
         "stats": "gameLog", "group": group,
-        "season": SEASON, "sportId": 1,
-    }, cache_key=f"gamelog_{prefix}_{player_id}_{SEASON}_{_today}")
+        "season": effective_season, "sportId": 1,
+    }, cache_key=f"gamelog_{prefix}_{player_id}_{effective_season}_{_today}")
 
     if not data:
         return {"error": "Could not fetch game log"}
@@ -492,11 +536,11 @@ def get_historical_splits(player_id: int, line: float,
     # pull season stat separately
     season_data = _get(f"/people/{player_id}/stats", {
         "stats": "season", "group": group,
-        "season": SEASON, "sportId": 1,
-    }, cache_key=f"season_{prefix}_{player_id}_{SEASON}")
+        "season": effective_season, "sportId": 1,
+    }, cache_key=f"season_{prefix}_{player_id}_{effective_season}")
 
     season_splits = ((season_data or {}).get("stats") or [{}])[0].get("splits", [])
-    season_stat = season_splits[0]["stat"] if season_splits else {}
+    season_stat = _combined_player_split(season_splits).get("stat", {})
 
     recent_batting_form = None
     if not is_pitcher:
@@ -587,17 +631,32 @@ def get_historical_splits(player_id: int, line: float,
     # -- a NEW field, deliberately separate from "recent_games" above (which
     # the Discord bot's embed builder reads and expects capped at 5; changing
     # that list's length would silently change the bot's own displayed text).
-    opp_hand_by_gamepk = _resolve_opp_pitcher_hands(splits[:20]) if include_hand_venue else {}
-    game_log = [
-        {
+    # A pitcher faces a mixed lineup, so an "opposing pitcher hand" filter is
+    # meaningless for pitcher props. Avoid the extra schedule/profile calls.
+    opp_hand_by_gamepk = (
+        _resolve_opp_pitcher_hands(splits[:20])
+        if include_hand_venue and not is_pitcher else {}
+    )
+    game_log = []
+    for g in splits[:max(1, int(max_games or 20))]:
+        stat = g["stat"]
+        entry = {
             "date":     g.get("date", ""),
             "opponent": g.get("opponent", {}).get("name", ""),
-            "value":    _stat_from_game(g["stat"], prop_type),
+            "opponentTeamId": g.get("opponent", {}).get("id"),
+            "value":    _stat_from_game(stat, prop_type),
             "isHome":   g.get("isHome"),
             "oppHand":  opp_hand_by_gamepk.get((g.get("game") or {}).get("gamePk")),
         }
-        for g in splits[:20]
-    ]
+        if is_pitcher:
+            entry["pitcherDetails"] = {
+                "inningsPitched": stat.get("inningsPitched"),
+                "battersFaced": stat.get("battersFaced"),
+                "pitchCount": stat.get("numberOfPitches", stat.get("pitchesThrown")),
+                "walks": stat.get("baseOnBalls"),
+                "strikeouts": stat.get("strikeOuts"),
+            }
+        game_log.append(entry)
 
     l5_hr, l10_hr, l20_hr = (_hit_rate(splits, line, prop_type, 5),
                              _hit_rate(splits, line, prop_type, 10),
@@ -751,17 +810,21 @@ def get_vs_team_game_log_history(player_id: int, opp_team_id: int,
                                  include_hand_venue: bool = False) -> list[dict]:
     """Return dated H2H game results across recent seasons, newest first."""
     all_games = []
+    group = "pitching" if str(prop_type).startswith("pitcher_") else "hitting"
     current_season = int(SEASON)
     for season in range(current_season, current_season - max(1, seasons), -1):
         data = _get(f"/people/{player_id}/stats", {
-            "stats": "gameLog", "group": "hitting", "season": season, "sportId": 1,
-        }, cache_key=f"gamelog_hit_{player_id}_{season}_h2h")
+            "stats": "gameLog", "group": group, "season": season, "sportId": 1,
+        }, cache_key=f"gamelog_{group}_{player_id}_{season}_h2h")
         raw = ((data or {}).get("stats") or [{}])[0].get("splits", [])
         all_games.extend(g for g in raw if g.get("opponent", {}).get("id") == opp_team_id)
 
     if not all_games:
         return []
-    hands = _resolve_opp_pitcher_hands(all_games) if include_hand_venue else {}
+    hands = (
+        _resolve_opp_pitcher_hands(all_games)
+        if include_hand_venue and group == "hitting" else {}
+    )
     result = []
     for game in all_games:
         game_pk = (game.get("game") or {}).get("gamePk")
@@ -804,9 +867,11 @@ def get_pitcher_metrics(pitcher_name: str) -> dict:
 
     season_splits = ((season_data or {}).get("stats") or [{}])[0].get("splits", [])
     if not season_splits:
-        return {"error": f"No 2025 pitching stats for {pitcher_name}"}
+        return {"error": f"No {SEASON} pitching stats for {pitcher_name}"}
 
-    s = season_splits[0]["stat"]
+    # MLB can return one split per team for pitchers who were traded. Combine
+    # those rows so the displayed record and rate stats represent the full season.
+    s = _combined_player_split(season_splits).get("stat", {})
     batters_faced = int(s.get("battersFaced", 1)) or 1
 
     # Recent starts
@@ -878,6 +943,8 @@ def get_pitcher_metrics(pitcher_name: str) -> dict:
         "hr_per_9":        s.get("homeRunsPer9", "-.--"),
         "innings_pitched": s.get("inningsPitched", "0.0"),
         "games_started":   games_started_season,
+        "wins":            int(s.get("wins", 0) or 0),
+        "losses":          int(s.get("losses", 0) or 0),
         "season_k_rate":   round(int(s.get("strikeOuts", 0)) / batters_faced, 3),
         "season_ks":       int(s.get("strikeOuts", 0)),
         "hits_per_9":      s.get("hitsPer9Inn", "-.--"),
@@ -1329,7 +1396,9 @@ def _confidence_tier(splits: dict, pitcher: dict, bvp: dict, trend: str, side: s
 def get_all_teams_k_rate() -> dict:
     """
     K% for all 30 MLB teams this season.
-    Returns {team_id: {k_pct, avg, name, rank}} where rank 1 = hardest to K.
+    Returns {team_id: {k_pct, avg, name, rank, pa, ks}} where rank 1 =
+    the lowest K% (hardest to strike out). Rankings are withheld unless the
+    official MLB response contains all 30 teams.
     """
     data = _get(
         "/teams/stats",
@@ -1350,12 +1419,330 @@ def get_all_teams_k_rate() -> dict:
                 "k_pct": round(ks / pa * 100, 1),
                 "avg":   s.get("avg", ".---"),
                 "name":  name,
+                "pa":    pa,
+                "ks":    ks,
             }
+    # Never turn a partial API response into an authoritative MLB rank.
+    if len(result) != 30:
+        log.warning("Ignoring incomplete MLB team K-rate response (%s/30 teams)", len(result))
+        return {}
     # rank 1 = lowest K rate = hardest to K
     sorted_teams = sorted(result.items(), key=lambda x: x[1]["k_pct"])
     for rank, (tid, _) in enumerate(sorted_teams, 1):
         result[tid]["rank"] = rank
     return result
+
+
+def get_all_teams_offensive_profile() -> dict:
+    """Official season offense profile and MLB ranks for all 30 teams.
+
+    Rank 1 is the strongest offensive result for every metric. Higher is
+    better for AVG, runs, HR and BB rate; lower is better for K rate.
+    ``edge`` interprets that offensive rank from the starting pitcher's
+    perspective.
+    A partial MLB response is never presented as a 30-team ranking.
+    """
+    data = _get(
+        "/teams/stats",
+        {"stats": "season", "group": "hitting", "season": SEASON, "sportId": 1},
+        # Shared with get_all_teams_k_rate: one official response supplies
+        # both cards instead of adding another network request.
+        cache_key=f"all_teams_hit_{SEASON}",
+    )
+    if not data:
+        return {}
+
+    raw = {}
+    for split in (data.get("stats") or [{}])[0].get("splits", []):
+        tid = split.get("team", {}).get("id")
+        s = split.get("stat", {})
+        if not tid:
+            continue
+        games = max(int(s.get("gamesPlayed", 0) or 0), 1)
+        pa = int(s.get("plateAppearances", 0) or 0)
+        at_bats = int(s.get("atBats", 0) or 0)
+        hits = int(s.get("hits", 0) or 0)
+        runs = int(s.get("runs", 0) or 0)
+        home_runs = int(s.get("homeRuns", 0) or 0)
+        strikeouts = int(s.get("strikeOuts", 0) or 0)
+        walks = int(s.get("baseOnBalls", 0) or 0)
+        # Derive every displayed rate from the official raw totals so the
+        # card is auditable instead of trusting a preformatted field.
+        avg = hits / at_bats if at_bats else 0.0
+        raw[tid] = {
+            "team_id": tid,
+            "team_name": split.get("team", {}).get("name", ""),
+            "games": games,
+            "pa": pa,
+            "at_bats": at_bats,
+            "hits": hits,
+            "runs": runs,
+            "home_runs": home_runs,
+            "strikeouts": strikeouts,
+            "walks": walks,
+            "avg": avg,
+            # Rank the unrounded rates; rounding before sorting can turn
+            # distinct teams into arbitrary ties even though MLB's totals
+            # show a real difference.
+            "runs_pg": runs / games,
+            "hr_pg": home_runs / games,
+            "k_pct": strikeouts / pa * 100 if pa else None,
+            "bb_pct": walks / pa * 100 if pa else None,
+        }
+
+    if len(raw) != 30:
+        log.warning("Ignoring incomplete MLB offense profile (%s/30 teams)", len(raw))
+        return {}
+
+    metric_defs = (
+        ("avg", "AVG", True),
+        ("runs_pg", "R", True),
+        ("hr_pg", "HR", True),
+        ("k_pct", "K%", False),
+        ("bb_pct", "BB%", True),
+    )
+    ranks = {}
+    for key, _, higher_is_better in metric_defs:
+        ordered = sorted(
+            raw,
+            key=lambda tid: raw[tid].get(key) or 0,
+            reverse=higher_is_better,
+        )
+        metric_ranks = {}
+        previous_value = object()
+        previous_rank = 0
+        for position, tid in enumerate(ordered, 1):
+            value = raw[tid].get(key)
+            if value != previous_value:
+                previous_rank = position
+                previous_value = value
+            metric_ranks[tid] = previous_rank
+        ranks[key] = metric_ranks
+
+    result = {}
+    for tid, team in raw.items():
+        metrics = []
+        for key, label, _ in metric_defs:
+            rank = ranks[key][tid]
+            edge = "batter" if rank <= 10 else "pitcher" if rank >= 21 else "neutral"
+            value = team[key]
+            display = (
+                "—" if value is None else
+                f"{value:.3f}".lstrip("0") if key == "avg" else
+                f"{value:.1f}%" if key in {"k_pct", "bb_pct"} else
+                f"{value:.1f}/g"
+            )
+            metrics.append({
+                "key": key, "label": label, "value": value,
+                "display": display, "rank": rank, "edge": edge,
+                "edge_label": "SP EDGE" if edge == "pitcher" else "BAT EDGE" if edge == "batter" else "NEUTRAL",
+            })
+        result[tid] = {
+            "team_id": tid, "team_name": team["team_name"],
+            "season": SEASON, "scope": "full_team_season",
+            "source": "MLB Stats API",
+            "games": team["games"], "pa": team["pa"], "metrics": metrics,
+            "totals": {
+                "at_bats": team["at_bats"], "hits": team["hits"],
+                "runs": team["runs"], "home_runs": team["home_runs"],
+                "strikeouts": team["strikeouts"], "walks": team["walks"],
+                "plate_appearances": team["pa"],
+            },
+        }
+    return result
+
+
+def _all_batter_splits_vs_hand(pitcher_hand: str) -> dict:
+    """Raw season platoon totals for every MLB hitter in one request."""
+    hand = str(pitcher_hand or "").upper()[:1]
+    if hand not in {"L", "R"}:
+        return {}
+    sit_code = "vl" if hand == "L" else "vr"
+    data = _get("/stats", {
+        "stats": "statSplits", "group": "hitting", "season": SEASON,
+        "sportIds": 1, "sitCodes": sit_code, "playerPool": "ALL", "limit": 2000,
+    }, cache_key=f"all_batters_{sit_code}_{SEASON}")
+    result = {}
+    for split in ((data or {}).get("stats") or [{}])[0].get("splits", []):
+        player = split.get("player") or {}
+        pid = str(player.get("id") or "")
+        if not pid:
+            continue
+        stat = split.get("stat") or {}
+        row = result.setdefault(pid, {
+            "id": player.get("id"), "name": player.get("fullName", ""),
+            "team_ids": set(), "games": 0, "at_bats": 0, "hits": 0,
+            "home_runs": 0, "strikeouts": 0, "walks": 0, "pa": 0,
+        })
+        team_id = (split.get("team") or {}).get("id")
+        if team_id:
+            row["team_ids"].add(int(team_id))
+        for source, target in (
+            ("gamesPlayed", "games"), ("atBats", "at_bats"),
+            ("hits", "hits"), ("homeRuns", "home_runs"),
+            ("strikeOuts", "strikeouts"), ("baseOnBalls", "walks"),
+            ("plateAppearances", "pa"),
+        ):
+            row[target] += int(stat.get(source, 0) or 0)
+    return result
+
+
+def _lineup_platoon_values(lineup: list, batter_splits: dict, runs_pg=None) -> dict:
+    # The bulk split map carries an internal ``team_ids`` set used while
+    # projecting all 30 lineups. Never leak that implementation detail into
+    # the public response: Python sets are not JSON serializable and caused
+    # every pitcher report (the only reports with opponentOffense attached)
+    # to return a misleading empty 200 response in production.
+    rows = []
+    for order, player in enumerate(lineup[:9], start=1):
+        split = batter_splits.get(str(player.get("id"))) or {}
+        rows.append({
+            "order": player.get("order") or order,
+            "id": split.get("id") or player.get("id"),
+            "name": split.get("name") or player.get("name", ""),
+            "games": split.get("games", 0) or 0,
+            "at_bats": split.get("at_bats", 0) or 0,
+            "hits": split.get("hits", 0) or 0,
+            "home_runs": split.get("home_runs", 0) or 0,
+            "strikeouts": split.get("strikeouts", 0) or 0,
+            "walks": split.get("walks", 0) or 0,
+            "pa": split.get("pa", 0) or 0,
+        })
+    if len(rows) != 9:
+        return {}
+    totals = {key: sum(row.get(key, 0) or 0 for row in rows) for key in (
+        "games", "at_bats", "hits", "home_runs", "strikeouts", "walks", "pa"
+    )}
+    lineup_games = totals["games"] / 9 if totals["games"] else 0
+    return {
+        "rows": rows, "totals": totals, "lineup_games": lineup_games,
+        "avg": totals["hits"] / totals["at_bats"] if totals["at_bats"] else None,
+        "runs_pg": runs_pg,
+        "hr_pg": totals["home_runs"] / lineup_games if lineup_games else None,
+        "k_pct": totals["strikeouts"] / totals["pa"] * 100 if totals["pa"] else None,
+        "bb_pct": totals["walks"] / totals["pa"] * 100 if totals["pa"] else None,
+    }
+
+
+def _full_team_platoon_profiles(pitcher_hand: str, benchmarks: dict) -> dict:
+    """All 30 full-team batting baselines versus one pitcher hand.
+
+    This is the stable pre-lineup source. Use MLB's native team-split endpoint
+    rather than rebuilding team totals from the current player pool. The
+    player-pool response can omit traded/inactive hitters and previously made
+    the Angels' vs-LHP line read 109 BB / 1,233 PA instead of MLB's complete
+    118 BB / 1,407 PA. ``/teams/stats`` returns all 30 official team rows in a
+    single request and matches the public StatMuse team split.
+
+    Runs/game and HR/game remain the official team-season rates. The handedness
+    split is plate-appearance based, so dividing its partial runs or homers by
+    every team game would understate the full-game environment.
+    """
+    hand = str(pitcher_hand or "").upper()[:1]
+    if hand not in {"L", "R"}:
+        return {}
+    sit_code = "vl" if hand == "L" else "vr"
+    data = _get("/teams/stats", {
+        "stats": "statSplits", "group": "hitting", "season": SEASON,
+        "sportIds": 1, "sitCodes": sit_code,
+    }, cache_key=f"all_teams_hit_{sit_code}_{SEASON}")
+    raw = {}
+    for split in ((data or {}).get("stats") or [{}])[0].get("splits", []):
+        team = split.get("team") or {}
+        tid = team.get("id")
+        if not tid:
+            continue
+        row = raw.setdefault(int(tid), {
+            "team_name": team.get("name", ""), "at_bats": 0, "hits": 0,
+            "home_runs": 0, "strikeouts": 0, "walks": 0, "pa": 0,
+            "split_games": 0,
+        })
+        stat = split.get("stat") or {}
+        for source, target in (
+            ("gamesPlayed", "split_games"),
+            ("atBats", "at_bats"), ("hits", "hits"),
+            ("homeRuns", "home_runs"), ("strikeOuts", "strikeouts"),
+            ("baseOnBalls", "walks"), ("plateAppearances", "pa"),
+        ):
+            row[target] += int(stat.get(source, 0) or 0)
+
+    values = {}
+    for tid, row in raw.items():
+        baseline = benchmarks.get(tid) or benchmarks.get(str(tid)) or {}
+        games = int(baseline.get("games", 0) or 0)
+        baseline_metrics = {metric.get("key"): metric.get("value")
+                            for metric in baseline.get("metrics", [])}
+        runs_pg = baseline_metrics.get("runs_pg")
+        hr_pg = baseline_metrics.get("hr_pg")
+        values[tid] = {
+            **row, "games": games, "runs_pg": runs_pg,
+            "avg": row["hits"] / row["at_bats"] if row["at_bats"] else None,
+            # As with runs, team HR/game is a game-level environment stat.
+            # Dividing only the subset of HR hit vs one hand by every team game
+            # badly understates it; keep the official full-season team rate.
+            "hr_pg": hr_pg,
+            "k_pct": row["strikeouts"] / row["pa"] * 100 if row["pa"] else None,
+            "bb_pct": row["walks"] / row["pa"] * 100 if row["pa"] else None,
+        }
+    if len(values) != 30:
+        log.warning("Ignoring incomplete MLB platoon profile (%s/30 teams vs %sHP)", len(values), hand)
+        return {}
+
+    metric_defs = (
+        ("avg", "AVG", True), ("runs_pg", "R", True),
+        ("hr_pg", "HR", True), ("k_pct", "K%", False),
+        ("bb_pct", "BB%", True),
+    )
+    profiles = {}
+    for tid, team in values.items():
+        metrics = []
+        for key, label, higher_is_better in metric_defs:
+            value = team.get(key)
+            reference = [row.get(key) for row in values.values() if row.get(key) is not None]
+            if value is None or len(reference) != 30:
+                return {}
+            rank = 1 + sum(other > value if higher_is_better else other < value for other in reference)
+            rank = min(30, rank)
+            edge = "batter" if rank <= 10 else "pitcher" if rank >= 21 else "neutral"
+            display = (f"{value:.3f}".lstrip("0") if key == "avg" else
+                       f"{value:.1f}%" if key in {"k_pct", "bb_pct"} else f"{value:.1f}/g")
+            metrics.append({
+                "key": key, "label": label, "value": value, "display": display,
+                "rank": rank, "edge": edge,
+                "edge_label": "SP EDGE" if edge == "pitcher" else "BAT EDGE" if edge == "batter" else "NEUTRAL",
+            })
+        profiles[tid] = {
+            "team_id": tid, "team_name": team["team_name"], "season": SEASON,
+            "scope": "team_baseline_vs_hand", "pitcher_hand": hand,
+            "source": "MLB Stats API", "lineup_size": None,
+            "runs_source": "team_season", "rank_scope": "30 full-team platoon baselines",
+            "metrics": metrics,
+            "totals": {
+                "at_bats": team["at_bats"], "hits": team["hits"],
+                "home_runs": team["home_runs"], "strikeouts": team["strikeouts"],
+                "walks": team["walks"], "plate_appearances": team["pa"],
+                "split_games": team["split_games"],
+            },
+        }
+    return profiles
+
+
+def get_lineup_offensive_profile(team_id: int, game_pk=None, game_date=None,
+                                  team_benchmarks=None, pitcher_hand=None) -> dict:
+    """Official full-team season profile versus the pitcher's handedness.
+
+    Pitcher-prop matchup scoring intentionally uses the complete opposing team
+    sample. It does not switch to a projected or confirmed nine, so the metric
+    remains stable and directly reproducible from MLB's team split endpoint.
+    The legacy function name is retained because it is part of the report API.
+    """
+    hand = str(pitcher_hand or "").upper()[:1]
+    if hand not in {"L", "R"}:
+        return {}
+    benchmarks = team_benchmarks or get_all_teams_offensive_profile()
+    if len(benchmarks) != 30:
+        return {}
+    return (_full_team_platoon_profiles(hand, benchmarks).get(int(team_id)) or {})
 
 
 def get_team_k_rate_vs_hand(team_id: int, pitcher_hand: str) -> dict:
@@ -1389,9 +1776,9 @@ def get_team_k_rate_vs_hand(team_id: int, pitcher_hand: str) -> dict:
 def get_all_teams_k_rate_home_away(is_home: bool) -> dict:
     """
     K rate + rank for ALL teams at home (is_home=True) or on the road.
-    One API call. Returns {team_id: {k_pct, rank, name}} where rank 1 = hardest
-    to strike out at that venue. Lets the K matchup use a venue-aware rank instead
-    of the season rank (e.g. Colorado is far tougher to K at Coors than overall).
+    One API call. Returns {team_id: {k_pct, rank, name, pa, ks}} where rank 1
+    is the lowest K% (hardest to strike out) at that venue. Rankings are only
+    returned for a complete 30-team MLB response.
     """
     sit = "h" if is_home else "a"
     data = _get(
@@ -1410,7 +1797,14 @@ def get_all_teams_k_rate_home_away(is_home: bool) -> dict:
         ks  = int(s.get("strikeOuts", 0))
         if tid and pa >= 50:
             result[tid] = {"k_pct": round(ks / pa * 100, 1),
-                           "name": sp.get("team", {}).get("name", "")}
+                           "name": sp.get("team", {}).get("name", ""),
+                           "pa": pa,
+                           "ks": ks}
+    # A transient/partial response must not manufacture a misleading rank.
+    if len(result) != 30:
+        log.warning("Ignoring incomplete MLB %s K-rate split (%s/30 teams)",
+                    "home" if is_home else "road", len(result))
+        return {}
     # rank 1 = lowest K% = hardest to strike out at this venue
     for rank, (tid, _) in enumerate(
             sorted(result.items(), key=lambda x: x[1]["k_pct"]), 1):
@@ -1463,7 +1857,7 @@ def get_batter_hand_splits(player_id: int, pitcher_hand: str = "R") -> dict:
         splits = (data.get("stats") or [{}])[0].get("splits", [])
         if not splits:
             continue
-        s = splits[0].get("stat", {})
+        s = _combined_player_split(splits).get("stat", {})
         pa = int(s.get("plateAppearances", 0) or 0)
         so = int(s.get("strikeOuts", 0) or 0)
         result[ph] = {
@@ -1518,6 +1912,66 @@ def get_team_bullpen(team_id: int) -> dict:
     }
 
 
+def _canonical_pitch_type(code: str) -> str:
+    """Normalize equivalent MLB/Savant pitch-family codes."""
+    code = str(code or "").strip().upper()
+    return {"KC": "CU", "FA": "FF"}.get(code, code)
+
+
+def _load_batter_arsenal_table() -> dict:
+    """Load the full official Savant batter-by-pitch leaderboard once."""
+    cache_file = CACHE_DIR / f"savant_batter_arsenal_v4_{SEASON}.json"
+    table = None
+    if cache_file.exists():
+        try:
+            if (time.time() - cache_file.stat().st_mtime) < 3600:
+                table = json.loads(cache_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    if table is None:
+        import csv as _csv
+        import io as _io
+        try:
+            r = requests.get(
+                "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats",
+                params={"type": "batter", "pitchType": "", "year": SEASON,
+                        "team": "", "min": "1", "csv": "true"},
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if not r.ok:
+                return {}
+            table = {}
+            reader = _csv.DictReader(_io.StringIO(r.content.decode("utf-8-sig")))
+            for row in reader:
+                pid = row.get("player_id", "").strip()
+                pa = int(float(row.get("pa", 0) or 0))
+                if not pid or pa < 1:
+                    continue
+                table.setdefault(pid, []).append({
+                    "team_abbr":   row.get("team_name_alt", "").strip().upper(),
+                    "pitch_type":  _canonical_pitch_type(row.get("pitch_type", "")),
+                    "pitch_name":  row.get("pitch_name", ""),
+                    "pa":          pa,
+                    "pitches":     int(float(row.get("pitches", 0) or 0)),
+                    "avg":         row.get("ba", ""),
+                    "slg":         row.get("slg", ""),
+                    "woba":        row.get("woba", ""),
+                    "whiff_pct":   row.get("whiff_percent", ""),
+                    "k_pct":       row.get("k_percent", ""),
+                    "hard_hit_pct": row.get("hard_hit_percent", ""),
+                    "run_value_per_100": row.get("run_value_per_100", ""),
+                })
+            try:
+                cache_file.write_text(json.dumps(table), encoding="utf-8")
+            except OSError:
+                pass
+        except requests.RequestException:
+            return {}
+    return table or {}
+
+
 def get_batter_arsenal_stats(batter_id: int) -> list[dict]:
     """
     Batter's REAL season performance vs each pitch type, from Baseball
@@ -1531,59 +1985,214 @@ def get_batter_arsenal_stats(batter_id: int) -> list[dict]:
 
     The leaderboard is one ~350KB CSV covering every qualified batter, so
     it's fetched once, parsed, and file-cached as JSON keyed by player id
-    (12h TTL); per-player calls after that are a dict lookup.
+    (1h TTL); per-player calls after that are a dict lookup.
 
-    Returns [{pitch_type, pitch_name, pa, pitches, avg, slg, woba, whiff_pct,
-    k_pct}], PA >= 10.
+    Returns every tracked pitch-type sample for display. The matchup scoring
+    layer still applies its own 10-PA reliability floor before using a row.
     """
-    cache_file = CACHE_DIR / f"savant_batter_arsenal_v2_{SEASON}.json"
-    table = None
+    # Return the leaderboard rows immediately. The old implementation then
+    # downloaded the batter's full pitch-level Statcast history solely to add
+    # an HR column that this leaderboard does not publish. That second CSV is
+    # large (roughly 20 seconds for Ohtani in a live timing test), causing the
+    # entire table to miss the research response deadline. wOBA is already an
+    # official per-pitch result in this leaderboard and is the honest, fast
+    # replacement for the unavailable HR breakout.
+    table = _load_batter_arsenal_table()
+    return [dict(row) for row in table.get(str(batter_id), [])]
+
+
+def _get_batter_pitch_type_home_runs(batter_id: int) -> dict[str, int]:
+    """Count season home runs by pitch type from pitch-level Statcast data."""
+    cache_file = CACHE_DIR / f"batter_pitch_hr_v3_{batter_id}_{SEASON}.json"
     if cache_file.exists():
         try:
-            if (time.time() - cache_file.stat().st_mtime) < 3600:  # 1h
-                table = json.loads(cache_file.read_text(encoding="utf-8"))
+            if time.time() - cache_file.stat().st_mtime < 3600:
+                return json.loads(cache_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             pass
-
-    if table is None:
+    params = [
+        ("all", "true"), ("type", "details"), ("player_type", "batter"),
+        ("hfSeaYear", f"{SEASON}|"), ("hfGT", "R|"),
+        ("batters_lookup[]", str(batter_id)),
+    ]
+    try:
+        response = requests.get(
+            "https://baseballsavant.mlb.com/statcast_search/csv",
+            params=params, timeout=30, headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if not response.ok:
+            return {}
         import csv as _csv
         import io as _io
+        counts = {}
+        text = response.content.decode("utf-8-sig")
+        for row in _csv.DictReader(_io.StringIO(text)):
+            if str(row.get("game_year") or "") != str(SEASON):
+                continue
+            if str(row.get("events") or "").strip() != "home_run":
+                continue
+            code = str(row.get("pitch_type") or "").strip().upper()
+            # Savant's arsenal leaderboard combines knuckle curves with the
+            # curveball family, while pitch-level search may retain KC.
+            if code == "KC":
+                code = "CU"
+            elif code == "FA":
+                code = "FF"
+            if code:
+                counts[code] = counts.get(code, 0) + 1
         try:
-            r = requests.get(
-                "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats",
-                params={"type": "batter", "pitchType": "", "year": SEASON,
-                        "team": "", "min": "10", "csv": "true"},
-                timeout=15,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            if not r.ok:
-                return []
-            table = {}
-            reader = _csv.DictReader(_io.StringIO(r.content.decode("utf-8-sig")))
-            for row in reader:
-                pid = row.get("player_id", "").strip()
-                pa = int(float(row.get("pa", 0) or 0))
-                if not pid or pa < 10:
-                    continue
-                table.setdefault(pid, []).append({
-                    "pitch_type": row.get("pitch_type", ""),
-                    "pitch_name": row.get("pitch_name", ""),
-                    "pa":         pa,
-                    "pitches":    int(float(row.get("pitches", 0) or 0)),
-                    "avg":        row.get("ba", ""),
-                    "slg":        row.get("slg", ""),
-                    "woba":       row.get("woba", ""),
-                    "whiff_pct":  row.get("whiff_percent", ""),
-                    "k_pct":      row.get("k_percent", ""),
-                })
-            try:
-                cache_file.write_text(json.dumps(table), encoding="utf-8")
-            except OSError:
-                pass
-        except requests.RequestException:
-            return []
+            cache_file.write_text(json.dumps(counts), encoding="utf-8")
+        except OSError:
+            pass
+        return counts
+    except requests.RequestException:
+        return {}
 
-    return table.get(str(batter_id), [])
+
+def get_team_vs_pitch_types(team_id: int, arsenal: list[dict] | None = None,
+                            team_abbr: str | None = None) -> list[dict]:
+    """Compare the opposing lineup with all MLB teams by pitch family.
+
+    Display metrics use tonight's posted lineup when available (otherwise the
+    active roster). ``lineup_rank`` is a genuine league comparison from the
+    full Baseball Savant batter pitch-arsenal leaderboard: 1 handles the
+    pitch best and 30 struggles most. A rank is only published when all 30
+    MLB teams have a qualifying sample for that pitch family.
+    """
+    if not team_id:
+        return []
+
+    def number(row: dict, key: str) -> float | None:
+        try:
+            value = row.get(key)
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    def aggregate(rows) -> dict[str, dict]:
+        buckets: dict[str, dict] = {}
+        for row in rows:
+            pitch_type = _canonical_pitch_type(row.get("pitch_type"))
+            if not pitch_type or (wanted and pitch_type not in wanted):
+                continue
+            pa = number(row, "pa") or 0.0
+            if pa <= 0:
+                continue
+            bucket = buckets.setdefault(pitch_type, {
+                "pitch_type": pitch_type,
+                "pitch_name": row.get("pitch_name") or pitch_type,
+                "pa": 0.0, "pitches": 0.0, "avg_sum": 0.0,
+                "slg_sum": 0.0, "woba_sum": 0.0, "whiff_sum": 0.0,
+                "k_sum": 0.0, "hard_hit_sum": 0.0, "hitters": 0,
+            })
+            bucket["pa"] += pa
+            bucket["pitches"] += number(row, "pitches") or 0.0
+            for source, target in (
+                ("avg", "avg_sum"), ("slg", "slg_sum"),
+                ("woba", "woba_sum"), ("whiff_pct", "whiff_sum"),
+                ("k_pct", "k_sum"), ("hard_hit_pct", "hard_hit_sum"),
+            ):
+                value = number(row, source)
+                if value is not None:
+                    bucket[target] += value * pa
+            bucket["hitters"] += 1
+
+        profiles = {}
+        for pitch_type, bucket in buckets.items():
+            pa = bucket["pa"]
+            whiff = bucket["whiff_sum"] / pa
+            k_pct = bucket["k_sum"] / pa
+            hard_hit = bucket["hard_hit_sum"] / pa
+            profiles[pitch_type] = {
+                "pitch_type": pitch_type,
+                "pitch_name": bucket["pitch_name"],
+                "pa": round(pa), "pitches": round(bucket["pitches"]),
+                "avg": round(bucket["avg_sum"] / pa, 3),
+                "slg": round(bucket["slg_sum"] / pa, 3),
+                "woba": round(bucket["woba_sum"] / pa, 3),
+                "whiff_pct": round(whiff * 100 if 0 < whiff <= 1 else whiff, 1),
+                "k_pct": round(k_pct * 100 if 0 < k_pct <= 1 else k_pct, 1),
+                "hard_hit_pct": round(hard_hit * 100 if 0 < hard_hit <= 1 else hard_hit, 1),
+                "hitters": bucket["hitters"],
+            }
+        return profiles
+
+    wanted = {
+        _canonical_pitch_type(p.get("pitch_type"))
+        for p in (arsenal or []) if p.get("pitch_type")
+    }
+    lineup = get_team_lineup(team_id) or []
+    hitters = lineup or get_team_hitters_roster(team_id) or []
+    hitter_ids = []
+    for hitter in hitters:
+        pid = hitter.get("id") or hitter.get("player_id") or hitter.get("person_id")
+        try:
+            if pid:
+                hitter_ids.append(int(pid))
+        except (TypeError, ValueError):
+            continue
+    if not hitter_ids:
+        return []
+
+    table = _load_batter_arsenal_table()
+    current_rows = [row for pid in hitter_ids for row in table.get(str(pid), [])]
+    current_profiles = aggregate(current_rows)
+    if not current_profiles:
+        return []
+
+    if not team_abbr:
+        team_data = _get(f"/teams/{team_id}", cache_key=f"team_profile_{team_id}")
+        team_obj = ((team_data or {}).get("teams") or [{}])[0]
+        team_abbr = _team_abbr(team_obj)
+    team_abbr = str(team_abbr or "").strip().upper()
+    if team_abbr == "OAK":
+        team_abbr = "ATH"
+
+    rows_by_team: dict[str, list] = {}
+    for player_rows in table.values():
+        for row in player_rows:
+            abbr = str(row.get("team_abbr") or "").strip().upper()
+            if abbr == "OAK":
+                abbr = "ATH"
+            if abbr:
+                rows_by_team.setdefault(abbr, []).append(row)
+    league_profiles = {abbr: aggregate(rows) for abbr, rows in rows_by_team.items()}
+
+    def strength(profile: dict) -> float:
+        # Transparent contact/damage blend. Higher = the bats handle the pitch
+        # better. The displayed rank comes from comparison, not rescaling this
+        # value into a pretend 1-30 score.
+        return (
+            (profile.get("woba") or 0) * .45
+            + (1 - (profile.get("whiff_pct") or 0) / 100) * .25
+            + (1 - (profile.get("k_pct") or 0) / 100) * .20
+            + ((profile.get("hard_hit_pct") or 0) / 100) * .10
+        )
+
+    out = []
+    for pitch_type, profile in current_profiles.items():
+        candidates = [
+            (abbr, team[pitch_type])
+            for abbr, team in league_profiles.items()
+            if pitch_type in team and team[pitch_type].get("pa", 0) >= 40
+        ]
+        lineup_rank = None
+        if len(candidates) == 30 and any(abbr == team_abbr for abbr, _ in candidates):
+            ordered = sorted(candidates, key=lambda item: strength(item[1]), reverse=True)
+            lineup_rank = next(rank for rank, (abbr, _) in enumerate(ordered, 1) if abbr == team_abbr)
+        profile.update({
+            "lineup_rank": lineup_rank,
+            # Backward-compatible key now points only to the real rank. Never
+            # fall back to the old modeled index.
+            "struggle_score": lineup_rank,
+            "ranked_teams": len(candidates),
+            "season": SEASON,
+            "thin_sample": profile.get("pa", 0) < 40,
+            "lineup_source": "posted lineup" if lineup else "active roster",
+            "rank_source": "Baseball Savant team-season comparison",
+        })
+        out.append(profile)
+    return sorted(out, key=lambda row: row.get("lineup_rank") or 0, reverse=True)
 
 
 def _pitcher_stat_from_game(s: dict, prop_type: str) -> float:
@@ -1599,6 +2208,8 @@ def _pitcher_stat_from_game(s: dict, prop_type: str) -> float:
         return float(s.get("earnedRuns", 0) or 0)
     if prop_type == "pitcher_hits_allowed":
         return float(s.get("hits", 0) or 0)
+    if prop_type == "pitcher_walks":
+        return float(s.get("baseOnBalls", 0) or 0)
     if prop_type == "pitcher_fantasy_score":
         outs = int(s.get("outs", 0) or 0)
         er = int(s.get("earnedRuns", 0) or 0)
@@ -1615,7 +2226,8 @@ def get_pitcher_k_card(pitcher_name: str, line: float,
                        is_home: bool = None) -> dict:
     """
     Analytical card for a pitcher counting-stat prop: strikeouts (the
-    original/default), pitching outs, earned runs allowed, hits allowed, or
+    original/default), pitching outs, earned runs allowed, hits allowed,
+    walks allowed, or
     a pitcher fantasy-score composite.
 
     Returns L5/L10/L20 hit rates from the pitching game log, season stats,
@@ -2214,7 +2826,7 @@ def get_game_lineup_ids(team_id: int) -> list[int]:
     return []
 
 
-def get_team_lineup(team_id: int) -> list[dict]:
+def get_team_lineup(team_id: int, game_pk=None, game_date=None) -> list[dict]:
     """
     Return today's confirmed batting order for a team, in order (1-9).
     The schedule endpoint's lineups.{home,away}Players array IS already in
@@ -2226,16 +2838,21 @@ def get_team_lineup(team_id: int) -> list[dict]:
     (e.g. "SS", "DH").
     """
     from vortextime import vortex_board_day
-    today = vortex_board_day()
-    data = _get("/schedule", {
-        "sportId": 1, "date": today,
-        "hydrate": "lineups",
-    }, cache_key=f"lineups_{today}")
+    today = game_date or vortex_board_day()
+    params = {"sportId": 1, "hydrate": "lineups"}
+    if game_pk:
+        params["gamePks"] = str(game_pk)
+    else:
+        params["date"] = today
+    data = _get("/schedule", params,
+                cache_key=f"lineups_{game_pk or today}")
     if not data:
         return []
     team_str = str(team_id)
     for date_entry in data.get("dates", []):
         for g in date_entry.get("games", []):
+            if game_pk and str(g.get("gamePk")) != str(game_pk):
+                continue
             lineups = g.get("lineups") or {}
             home_id = str((g.get("teams") or {}).get("home", {}).get("team", {}).get("id", ""))
             away_id = str((g.get("teams") or {}).get("away", {}).get("team", {}).get("id", ""))
@@ -2259,6 +2876,83 @@ def get_team_lineup(team_id: int) -> list[dict]:
                 "position": ((p.get("position") or p.get("primaryPosition") or {}).get("abbreviation", "")),
             } for index, p in enumerate(ordered, start=1) if p.get("id")]
     return []
+
+
+def get_all_projected_team_lineups(before_date=None, lookback_days: int = 21,
+                                   batter_splits=None, team_ids=None) -> dict:
+    """Build the same recent-order nine-player projection for every team."""
+    from datetime import timedelta as _td
+    from vortextime import vortex_board_day
+    try:
+        target = datetime.strptime(str(before_date or vortex_board_day())[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        target = datetime.strptime(vortex_board_day(), "%Y-%m-%d").date()
+    end = target - _td(days=1)
+    start = end - _td(days=max(1, lookback_days - 1))
+    data = _get("/schedule", {
+        "sportId": 1, "startDate": start.isoformat(), "endDate": end.isoformat(),
+        "hydrate": "lineups",
+    }, cache_key=f"projected_lineups_all_{end.isoformat()}")
+    batter_splits = batter_splits or {}
+    wanted_teams = {int(team) for team in (team_ids or [])}
+    appearances = {team: {} for team in wanted_teams}
+    slots = {team: {} for team in wanted_teams}
+    game_counts = {team: 0 for team in wanted_teams}
+    for date_entry in (data or {}).get("dates", []):
+        for game in date_entry.get("games", []):
+            for club_side, lineup_side in (("home", "homePlayers"), ("away", "awayPlayers")):
+                team = int(((game.get("teams") or {}).get(club_side, {}).get("team") or {}).get("id", 0) or 0)
+                if team not in wanted_teams:
+                    continue
+                players = [player for player in (game.get("lineups") or {}).get(lineup_side, [])
+                           if (player.get("position") or player.get("primaryPosition") or {}).get("abbreviation") != "P"]
+                if len(players) < 9:
+                    continue
+                game_counts[team] += 1
+                for index, player in enumerate(players[:9], start=1):
+                    pid = str(player.get("id", ""))
+                    if not pid:
+                        continue
+                    order = str(player.get("battingOrder", ""))
+                    slot = int(order[0]) if order[:1].isdigit() else index
+                    appearances[team][pid] = appearances[team].get(pid, 0) + 1
+                    slots[team].setdefault(pid, []).append(slot)
+
+    result = {}
+    for team in wanted_teams:
+        # Recent participants lead; bulk platoon PA fills/tiebreaks the nine.
+        candidates = set(appearances[team])
+        candidates.update(pid for pid, row in batter_splits.items() if team in row.get("team_ids", set()))
+        selected = sorted(
+            candidates,
+            key=lambda pid: (appearances[team].get(pid, 0), (batter_splits.get(pid) or {}).get("pa", 0)),
+            reverse=True,
+        )[:9]
+        if len(selected) < 9:
+            continue
+        selected.sort(key=lambda pid: (
+            sum(slots[team].get(pid, [])) / len(slots[team][pid]) if slots[team].get(pid) else 10,
+            -(batter_splits.get(pid) or {}).get("pa", 0),
+        ))
+        result[team] = {
+            "lineup": [{
+                "order": index, "id": int(pid),
+                "name": (batter_splits.get(pid) or {}).get("name", ""), "position": "",
+            } for index, pid in enumerate(selected, start=1)],
+            "games": game_counts[team], "through": end.isoformat(),
+        }
+    return result
+
+
+def get_projected_team_lineup(team_id: int, before_date=None, lookback_days: int = 21) -> dict:
+    """Compatibility wrapper for callers that only need one projected nine."""
+    # Overall PA is sufficient for selection callers that do not supply a
+    # matchup hand; the matchup card itself uses the hand-specific bulk map.
+    splits = _all_batter_splits_vs_hand("R")
+    return get_all_projected_team_lineups(
+        before_date=before_date, lookback_days=lookback_days,
+        batter_splits=splits, team_ids=[int(team_id)],
+    ).get(int(team_id), {})
 
 
 def get_team_hitters_roster(team_id: int) -> list[dict]:
@@ -2303,7 +2997,7 @@ def get_batter_season_line(player_id: int) -> dict:
     splits = ((data or {}).get("stats") or [{}])[0].get("splits", [])
     if not splits:
         return {}
-    s = splits[0].get("stat", {})
+    s = _combined_player_split(splits).get("stat", {})
     pa = int(s.get("plateAppearances", 0) or 0)
     so = int(s.get("strikeOuts", 0) or 0)
     return {
@@ -2570,7 +3264,10 @@ PARK_FACTOR: dict[str, float] = {
     "Minnesota Twins":         0.97,  # Target Field
     "New York Mets":           0.97,  # Citi Field
     "Cleveland Guardians":     0.97,
-    "Oakland Athletics":       0.97,
+    # The Athletics now play at Sutter Health Park. Do not carry Oakland
+    # Coliseum's pitcher-friendly factor into the Sacramento home schedule.
+    "Athletics":               1.35,
+    "Oakland Athletics":       1.35,
     "Washington Nationals":    0.96,  # Nationals Park
     "Miami Marlins":           0.96,  # loanDepot Park
     "Los Angeles Dodgers":     0.96,  # Dodger Stadium

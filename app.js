@@ -887,8 +887,7 @@ const ESPN_TEAM_LOGO_SLUGS = {
 };
 
 function teamLogoUrl(teamId) {
-  const slug = ESPN_TEAM_LOGO_SLUGS[Number(teamId)];
-  return slug ? `https://a.espncdn.com/i/teamlogos/mlb/500/${slug}.png` : "";
+  return ESPN_TEAM_LOGO_SLUGS[Number(teamId)] ? `/api/team-logo?teamId=${Number(teamId)}` : "";
 }
 
 /* ---------- Auth gate (Discord OAuth + Premium/Tester role) ---------- */

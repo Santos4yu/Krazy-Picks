@@ -198,7 +198,6 @@ async function init() {
   wireSlate();
   wireV2Board();
   wireParlayBuilder();
-  wireSlipAnalyzer();
   wireAdminPanel();
   wireSidePanel();
   wireSpecialMarkets();
@@ -255,7 +254,6 @@ function cacheEls() {
 
   els.panelV2 = document.getElementById("panel-v2");
   els.panelBuilder = document.getElementById("panel-builder");
-  els.panelSlip = document.getElementById("panel-slip");
   els.panelMoneyline = document.getElementById("panel-moneyline");
   els.panelNrfi = document.getElementById("panel-nrfi");
   els.panelAdmin = document.getElementById("panel-admin");
@@ -605,7 +603,6 @@ function switchTab(tab) {
   els.panelSlate.hidden = tab !== "slate";
   els.panelV2.hidden = tab !== "v2";
   els.panelBuilder.hidden = tab !== "builder";
-  els.panelSlip.hidden = tab !== "slip";
   els.panelMoneyline.hidden = tab !== "moneyline";
   els.panelNrfi.hidden = tab !== "nrfi";
   els.panelAdmin.hidden = tab !== "admin";

@@ -887,7 +887,7 @@ const ESPN_TEAM_LOGO_SLUGS = {
 };
 
 function teamLogoUrl(teamId) {
-  return ESPN_TEAM_LOGO_SLUGS[Number(teamId)] ? `/api/team-logo?teamId=${Number(teamId)}` : "";
+  return ESPN_TEAM_LOGO_SLUGS[Number(teamId)] ? `/team-logos/${Number(teamId)}.svg` : "";
 }
 
 /* ---------- Auth gate (Discord OAuth + Premium/Tester role) ---------- */

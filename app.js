@@ -876,7 +876,19 @@ function avatarHtml(playerOrProp, size = "") {
 
 function teamLogoHtml(teamId, teamName = "", className = "team-logo") {
   if (!teamId) return "";
-  return `<img class="${className}" src="https://www.mlbstatic.com/team-logos/${Number(teamId)}.svg" alt="${escapeHtml(teamName)}" loading="lazy">`;
+  const url = teamLogoUrl(teamId);
+  return url ? `<img class="${className}" src="${url}" alt="" aria-hidden="true" loading="lazy" onerror="this.remove()">` : "";
+}
+
+const ESPN_TEAM_LOGO_SLUGS = {
+  108:"laa",109:"ari",110:"bal",111:"bos",112:"chc",113:"cin",114:"cle",115:"col",116:"det",117:"hou",
+  118:"kc",119:"lad",120:"wsh",121:"nym",133:"oak",134:"pit",135:"sd",136:"sea",137:"sf",138:"stl",
+  139:"tb",140:"tex",141:"tor",142:"min",143:"phi",144:"atl",145:"chw",146:"mia",147:"nyy",158:"mil",
+};
+
+function teamLogoUrl(teamId) {
+  const slug = ESPN_TEAM_LOGO_SLUGS[Number(teamId)];
+  return slug ? `https://a.espncdn.com/i/teamlogos/mlb/500/${slug}.png` : "";
 }
 
 /* ---------- Auth gate (Discord OAuth + Premium/Tester role) ---------- */
@@ -2036,7 +2048,7 @@ function openGameLogModal(p) {
   if (els.gamelogTeamMark) {
     els.gamelogTeamMark.hidden = !teamName && !teamId;
     els.gamelogTeamMark.innerHTML = teamId
-      ? `<img src="https://www.mlbstatic.com/team-logos/${encodeURIComponent(teamId)}.svg" alt="" onerror="this.style.display='none'"><span>${escapeHtml(teamName)}</span>`
+      ? `<img src="${teamLogoUrl(teamId)}" alt="" aria-hidden="true" onerror="this.remove()"><span>${escapeHtml(teamName)}</span>`
       : `<span>${escapeHtml(teamName)}</span>`;
   }
   const cutout = String(p.headshot || "").replace("/headshot/67/current", "/headshot/silo/current");
@@ -2217,7 +2229,7 @@ function renderGameLogChart() {
           ${details ? `<div class="gl-detail-card" role="tooltip"><header><strong>${escapeHtml(fullDate)}</strong><span>${escapeHtml(g.opponent || "")}</span></header><div class="gl-detail-result">${g.over ? "Cleared" : "Under"} by ${Math.abs(Number(g.value) - Number(gameLogState.line)).toFixed(1)}</div>${tooltipRows}</div>` : ""}
         </div>
       </div>
-      ${games.length <= 20 ? `<span class="gl-opponent-logo">${opponentId ? `<img src="https://www.mlbstatic.com/team-logos/${encodeURIComponent(opponentId)}.svg" alt="" loading="lazy" onerror="this.parentElement.textContent='${escapeHtml(String(g.opponent || "").slice(0, 3))}'">` : escapeHtml(String(g.opponent || "").slice(0, 3))}</span>` : ""}
+      ${games.length <= 20 ? `<span class="gl-opponent-logo">${opponentId ? `<img src="${teamLogoUrl(opponentId)}" alt="" aria-hidden="true" loading="lazy" onerror="this.parentElement.textContent='${escapeHtml(String(g.opponent || "").slice(0, 3))}'">` : escapeHtml(String(g.opponent || "").slice(0, 3))}</span>` : ""}
     `;
     const shell = col.querySelector(".gl-bar-shell");
     shell?.addEventListener("click", () => {
@@ -3950,8 +3962,8 @@ function renderSlate(data) {
     const bpText = e.bullpen_known
       ? `${bullpenLabel} · ${e.bullpen_era.toFixed(2)} ERA`
       : "Data unavailable";
-    const teamLogo = e.team_id ? `https://www.mlbstatic.com/team-logos/${e.team_id}.svg` : "";
-    const opponentLogo = e.opponent_team_id ? `https://www.mlbstatic.com/team-logos/${e.opponent_team_id}.svg` : "";
+    const teamLogo = e.team_id ? teamLogoUrl(e.team_id) : "";
+    const opponentLogo = e.opponent_team_id ? teamLogoUrl(e.opponent_team_id) : "";
 
     row.innerHTML = `
       <span class="slate-player-photo-wrap ${difficultyClass}">
